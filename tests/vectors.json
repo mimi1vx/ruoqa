@@ -1,0 +1,19 @@
+{
+  "provenance": "Generated 2026-08-03 by driving openqa_async._auth.OpenQAAuth.auth_flow() from mimi1vx/openqa-async (Python, GPL-2.0-or-later) with time.time() monkeypatched to each vector's timestamp. Cases 1-2 mirror tests/test_auth.py::test_known_value_hmac and test_path_fixups_space_and_tilde.",
+  "vectors": [
+    {
+      "secret": "SECRET01",
+      "url": "https://openqa.example/api/v1/jobs",
+      "timestamp": "1234567890.0",
+      "signing_string": "/api/v1/jobs",
+      "hash": "5dd9172343c3695b1213e78d2a635f31ca475831"
+    },
+    {
+      "secret": "SECRET02",
+      "url": "https://openqa.example/api/v1/jobs?test=foo bar&u=~name",
+      "timestamp": "1700000000.0",
+      "signing_string": "/api/v1/jobs?test=foo+bar&u=%7Ename",
+      "hash": "6cd9bba9e451c1371f77070fa2ddd0ed4444fd1b"
+    }
+  ]
+}
