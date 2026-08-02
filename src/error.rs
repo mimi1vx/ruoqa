@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Error types returned by `ruoqa`.
+
+use std::time::Duration;
+
+use thiserror::Error;
+
+/// The error type for all fallible `ruoqa` operations.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// The server responded with a non-success HTTP status.
+    #[error("{method} {url} returned {status}")]
+    Request {
+        method: reqwest::Method,
+        url: url::Url,
+        status: reqwest::StatusCode,
+        body: String,
+    },
+
+    /// The request could not reach the server.
+    #[error("failed to connect to {url}")]
+    Connection {
+        url: url::Url,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    /// `client.conf` could not be located or parsed.
+    #[error("configuration error: {0}")]
+    Config(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// TLS setup failed.
+    #[error("TLS error: {0}")]
+    Tls(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// The response body could not be parsed as JSON or YAML.
+    #[error("failed to parse response body: {0}")]
+    Parse(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// The response body exceeded the configured size limit.
+    #[error("response body exceeded the {limit}-byte limit")]
+    BodyTooLarge { limit: usize },
+
+    /// The request was redirected more times than allowed.
+    #[error("exceeded the maximum of {max} redirects")]
+    TooManyRedirects { max: usize },
+
+    /// A redirect pointed at a different origin than the original request.
+    #[error("refusing to follow redirect from {from} to a different origin {to}")]
+    CrossOriginRedirect { from: url::Url, to: url::Url },
+
+    /// The overall retry deadline elapsed before the request succeeded.
+    #[error("deadline exceeded after {elapsed:?}")]
+    DeadlineExceeded { elapsed: Duration },
+}
+
+/// A specialized [`Result`](std::result::Result) using [`Error`].
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_send_sync_static<T: Send + Sync + 'static>() {}
+
+    #[test]
+    fn error_is_send_sync_static() {
+        assert_send_sync_static::<Error>();
+    }
+}
