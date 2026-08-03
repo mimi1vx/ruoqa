@@ -4,6 +4,7 @@
 //! and capped response parsing.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -44,6 +45,7 @@ pub struct ClientBuilder {
     max_response_bytes: usize,
     max_redirects: usize,
     user_agent: String,
+    config_paths: Option<Vec<PathBuf>>,
 }
 
 impl fmt::Debug for ClientBuilder {
@@ -59,6 +61,7 @@ impl fmt::Debug for ClientBuilder {
             .field("max_response_bytes", &self.max_response_bytes)
             .field("max_redirects", &self.max_redirects)
             .field("user_agent", &self.user_agent)
+            .field("config_paths", &self.config_paths)
             .finish()
     }
 }
@@ -76,6 +79,7 @@ impl Default for ClientBuilder {
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             max_redirects: DEFAULT_MAX_REDIRECTS,
             user_agent: format!("ruoqa/{}", env!("CARGO_PKG_VERSION")),
+            config_paths: None,
         }
     }
 }
@@ -161,6 +165,17 @@ impl ClientBuilder {
         self
     }
 
+    /// Overrides the `client.conf` search path used by [`ClientBuilder::build`].
+    ///
+    /// Unset (the default) searches [`config::default_paths`]. An empty
+    /// `vec![]` reads no `client.conf` at all, rather than falling back to
+    /// the default search.
+    #[must_use]
+    pub fn config_paths(mut self, config_paths: Vec<PathBuf>) -> Self {
+        self.config_paths = Some(config_paths);
+        self
+    }
+
     /// Resolves `client.conf`, builds the underlying `reqwest::Client`, and
     /// returns a ready-to-use [`Client`].
     ///
@@ -176,7 +191,8 @@ impl ClientBuilder {
     /// bad custom CA bundle).
     #[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
     pub fn build(self) -> Result<Client> {
-        let resolved = config::resolve(&config::default_paths(), &self.server, &self.scheme)?;
+        let config_paths = self.config_paths.unwrap_or_else(config::default_paths);
+        let resolved = config::resolve(&config_paths, &self.server, &self.scheme)?;
         let api_key = self.api_key.or(resolved.api_key);
         let api_secret = self.api_secret.or(resolved.api_secret);
         let base_url = resolved.base_url;
@@ -703,6 +719,7 @@ mod tests {
             .api_key(ApiKey::new("KEY"))
             .api_secret(ApiSecret::new("SECRET"))
             .tls(TlsMode::danger_accept_invalid_certs())
+            .config_paths(vec![])
             .build()
             .unwrap();
         assert_eq!(client.inner.api_key.as_ref().unwrap().as_str(), "KEY");
@@ -715,6 +732,7 @@ mod tests {
             .server("localhost:9526")
             .api_key(ApiKey::new("SUPERSECRETKEY"))
             .api_secret(ApiSecret::new("SUPERSECRETVALUE"))
+            .config_paths(vec![])
             .build()
             .unwrap();
         let debug = format!("{client:?}");
@@ -729,6 +747,7 @@ mod tests {
             .server("http://openqa.example.com")
             .api_key(ApiKey::new("KEY"))
             .api_secret(ApiSecret::new("SECRET"))
+            .config_paths(vec![])
             .build()
             .unwrap();
         assert!(logs_contain(
@@ -743,6 +762,7 @@ mod tests {
             .server("http://localhost:9526")
             .api_key(ApiKey::new("KEY"))
             .api_secret(ApiSecret::new("SECRET"))
+            .config_paths(vec![])
             .build()
             .unwrap();
         assert!(!logs_contain("plaintext"));
@@ -753,6 +773,7 @@ mod tests {
     fn no_warning_without_credentials() {
         ClientBuilder::new()
             .server("http://openqa.example.com")
+            .config_paths(vec![])
             .build()
             .unwrap();
         assert!(!logs_contain("plaintext"));

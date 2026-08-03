@@ -2,11 +2,13 @@
 
 //! `client.conf` discovery scenarios, driven over an injectable path list so
 //! no test touches the real `$HOME` or `/etc/openqa` and the suite stays
-//! parallel-safe.
+//! parallel-safe. Also covers `ClientBuilder::config_paths`, the same
+//! injection seam exposed at the builder level.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use ruoqa::ClientBuilder;
 use ruoqa::config::resolve;
 
 /// A throwaway directory, removed on drop. Avoids a `tempfile`
@@ -170,4 +172,28 @@ fn trailing_whitespace_on_values_is_stripped() {
     let config = resolve(&[path], "openqa.example.com", "").unwrap();
     assert_eq!(config.api_key.unwrap().as_str(), "AAAAAAAA");
     assert_eq!(config.api_secret.unwrap().as_str(), "BBBBBBBB");
+}
+
+/// `ClientBuilder::config_paths` reads the injected fixture instead of the
+/// ambient `client.conf` search.
+#[test]
+fn builder_config_paths_reads_the_fixture() {
+    let dir = tempdir();
+    let path = write_conf(&dir, "[openqa.fixture.example]\nkey = A\nsecret = B\n");
+    let client = ClientBuilder::new()
+        .config_paths(vec![path])
+        .build()
+        .unwrap();
+    assert_eq!(
+        client.base_url().as_str(),
+        "https://openqa.fixture.example/"
+    );
+}
+
+/// `ClientBuilder::config_paths(vec![])` skips `client.conf` discovery
+/// entirely, falling back to `localhost` with no credentials.
+#[test]
+fn builder_empty_config_paths_skips_discovery() {
+    let client = ClientBuilder::new().config_paths(vec![]).build().unwrap();
+    assert_eq!(client.base_url().as_str(), "http://localhost/");
 }

@@ -43,6 +43,10 @@ If `$OPENQA_CONFIG` is set, it is a directory that **exclusively overrides**
 this search: only `$OPENQA_CONFIG/client.conf` is read, and `/etc` and the
 user config dir are not consulted.
 
+[`ClientBuilder::config_paths`] overrides this whole search with an explicit
+path list, e.g. to point at a fixture in tests; an empty list skips reading
+`client.conf` entirely.
+
 Each section is keyed by the server host (or full base URL) and provides the
 API `key`/`secret`:
 
@@ -150,3 +154,4 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 [`RetryPolicy::upstream_compat`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.RetryPolicy.html#method.upstream_compat
 [`ClientBuilder::max_redirects`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.max_redirects
 [`ClientBuilder::max_response_bytes`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.max_response_bytes
+[`ClientBuilder::config_paths`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.config_paths
