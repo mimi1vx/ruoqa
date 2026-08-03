@@ -6,6 +6,13 @@ rust-version = "1.96"
 license = "GPL-3.0-or-later"
 description = "Async openQA REST API client"
 repository = "https://github.com/mimi1vx/ruoqa"
+readme = "README.md"
+keywords = ["openqa", "client", "api", "async", "hmac"]
+categories = ["api-bindings", "web-programming::http-client"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 bytes = "1.12.1"

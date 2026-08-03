@@ -122,6 +122,17 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
   [`ClientBuilder::max_response_bytes`]) unless read via
   [`Client::send_raw`].
 
+## Versioning
+
+While `ruoqa` is at `0.1.x`, the **minor** version is the breaking bump:
+`0.1.x` → `0.2.0` for anything the [Cargo SemVer
+reference](https://doc.rust-lang.org/cargo/reference/semver.html) calls a
+major change (removing a public item, adding a variant to a non-`#[non_exhaustive]`
+enum, adding a non-defaulted trait item, …). Patch releases (`0.1.x`) are
+additive/fixes only. `Error`, `JobState`, and `JobResult` are marked
+`#[non_exhaustive]` so the server adding new states or job results doesn't
+force a breaking release.
+
 ## License
 
 GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYING).

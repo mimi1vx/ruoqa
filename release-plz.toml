@@ -1,0 +1,2 @@
+[workspace]
+publish = false # actual `cargo publish` happens via OIDC in release.yml (tag-triggered)
