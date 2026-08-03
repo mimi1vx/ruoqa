@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/mimi1vx/ruoqa/compare/v0.1.1...v0.1.2) - 2026-08-03
+
+### Added
+
+- *(client)* add form-encoded request bodies
+- *(client)* allow injecting client.conf search paths via ClientBuilder
+
+### Other
+
+- *(release)* make crates.io publish idempotent against duplicate tag pushes
+
 ## [0.1.1](https://github.com/mimi1vx/ruoqa/compare/v0.1.0...v0.1.1) - 2026-08-03
 
 ### Added
