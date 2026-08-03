@@ -8,6 +8,7 @@ description = "Async openQA API client (partial Rust port of openqa-async)"
 repository = "https://github.com/mimi1vx/ruoqa"
 
 [dependencies]
+bytes = "1.12.1"
 hmac = "0.13.0"
 httpdate = "1.0.3"
 reqwest = "0.13.4"
@@ -27,6 +28,7 @@ axum = "0.8.9"
 rcgen = "0.14.8"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 tokio-rustls = "0.26.4"
+tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
 wiremock = "0.6.5"
 
 [lints.rust]

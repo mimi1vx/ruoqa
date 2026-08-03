@@ -54,6 +54,14 @@ pub enum Error {
     /// The overall retry deadline elapsed before the request succeeded.
     #[error("deadline exceeded after {elapsed:?}")]
     DeadlineExceeded { elapsed: Duration },
+
+    /// A request path could not be resolved against the client's base URL.
+    #[error("invalid request path {path:?}: {source}")]
+    InvalidPath {
+        path: String,
+        #[source]
+        source: url::ParseError,
+    },
 }
 
 /// A specialized [`Result`](std::result::Result) using [`Error`].
