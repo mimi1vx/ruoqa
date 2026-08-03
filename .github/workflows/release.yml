@@ -1,6 +1,24 @@
 name: release
 
+# release-plz creates the tag and GitHub Release with GITHUB_TOKEN, and GitHub
+# suppresses workflow triggers for events raised by GITHUB_TOKEN. So neither
+# `push: tags` nor `release: published` fires for an automated release — this
+# workflow has to be *called* by release-plz.yml instead. The `push: tags`
+# trigger is kept for hand-pushed tags; `workflow_dispatch` is the manual
+# retry path.
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Tag to publish from.
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag to publish from, e.g. v0.1.2.
+        required: true
+        type: string
   push:
     tags: ['v*']
 
@@ -13,12 +31,16 @@ jobs:
       contents: read      # setting any permissions zeroes the rest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Empty on `push`, where checkout falls back to the pushed tag.
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
-      # GitHub's push-event delivery is at-least-once, so a duplicate
-      # delivery for the same tag can race two runs of this job. crates.io
-      # rejects the loser with "already uploaded"/"already exists"; treat
-      # that as a no-op instead of a failed run.
+      # A retry, a hand-pushed tag racing the automated call, or GitHub's
+      # at-least-once push delivery can run this job twice for one version.
+      # crates.io rejects the loser with "already uploaded"/"already exists";
+      # treat that as a no-op instead of a failed run.
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

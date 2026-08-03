@@ -6,14 +6,16 @@ on:
 
 jobs:
   # Tag + GitHub Release for merged release PRs. `cargo publish` itself
-  # happens via OIDC in release.yml once the tag is pushed (release-plz.toml
-  # sets `publish = false`).
+  # happens via OIDC in release.yml (release-plz.toml sets `publish = false`).
   release-plz-release:
     name: release-plz release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: read
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+      releases: ${{ steps.release-plz.outputs.releases }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -21,10 +23,24 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: release-plz/action@v0.5.131
+        id: release-plz
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The tag release-plz just pushed used GITHUB_TOKEN, so it raises no `push`
+  # or `release` event of its own — call the publish workflow explicitly.
+  publish:
+    name: publish to crates.io
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/release.yml
+    with:
+      ref: ${{ fromJSON(needs.release-plz-release.outputs.releases)[0].tag }}
 
   # Opens/updates the release PR with version bumps and changelog.
   release-plz-pr:
