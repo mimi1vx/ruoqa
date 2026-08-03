@@ -18,8 +18,11 @@ use crate::secret::{ApiKey, ApiSecret};
 /// `base_url.origin().ascii_serialization()`.
 #[derive(Debug)]
 pub struct Config {
+    /// The resolved base URL, scheme included.
     pub base_url: Url,
+    /// The API key, if `client.conf` (or an override) provided one.
     pub api_key: Option<ApiKey>,
+    /// The API secret, if `client.conf` (or an override) provided one.
     pub api_secret: Option<ApiSecret>,
 }
 

@@ -81,6 +81,8 @@ impl Default for ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Creates a builder with default settings; see the setters below to
+    /// override them.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -116,36 +118,43 @@ impl ClientBuilder {
         self
     }
 
+    /// Overrides the connect/read/total/pool-idle timeouts.
     #[must_use]
     pub fn timeouts(mut self, timeouts: Timeouts) -> Self {
         self.timeouts = timeouts;
         self
     }
 
+    /// Overrides the retry behaviour.
     #[must_use]
     pub fn retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
     }
 
+    /// Overrides TLS certificate verification behaviour.
     #[must_use]
     pub fn tls(mut self, tls: TlsMode) -> Self {
         self.tls = tls;
         self
     }
 
+    /// Overrides the maximum response body size accepted by
+    /// [`Client::request`]/[`Client::request_as`].
     #[must_use]
     pub fn max_response_bytes(mut self, max_response_bytes: usize) -> Self {
         self.max_response_bytes = max_response_bytes;
         self
     }
 
+    /// Overrides the maximum number of redirects followed.
     #[must_use]
     pub fn max_redirects(mut self, max_redirects: usize) -> Self {
         self.max_redirects = max_redirects;
         self
     }
 
+    /// Overrides the `User-Agent` header.
     #[must_use]
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
@@ -267,13 +276,18 @@ impl fmt::Debug for Client {
 /// send time, not once up front.
 #[derive(Debug, Clone)]
 pub struct PreparedRequest {
+    /// The HTTP method to send.
     pub method: Method,
+    /// The fully resolved request URL.
     pub url: Url,
+    /// Headers to send, excluding the per-attempt auth headers `sign` adds.
     pub headers: HeaderMap,
+    /// The request body, if any.
     pub body: Option<Bytes>,
 }
 
 impl Client {
+    /// The base URL this client was built with.
     #[must_use]
     pub fn base_url(&self) -> &Url {
         &self.inner.base_url

@@ -16,7 +16,9 @@ pub enum TlsMode {
     /// `from_pem` / `from_der`. `replace_roots = true` pins to *only* the
     /// supplied CA, discarding the platform roots.
     CustomCa {
+        /// The CA certificate(s) to trust.
         certs: Vec<Certificate>,
+        /// If `true`, trust *only* `certs`, discarding the platform roots.
         replace_roots: bool,
     },
     /// Disable certificate verification entirely. Dangerous: only reachable

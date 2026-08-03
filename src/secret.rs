@@ -12,10 +12,12 @@ use zeroize::ZeroizeOnDrop;
 pub struct ApiKey(Box<str>);
 
 impl ApiKey {
+    /// Wraps `key` as an [`ApiKey`].
     pub fn new(key: impl Into<Box<str>>) -> Self {
         Self(key.into())
     }
 
+    /// Returns the key as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -33,10 +35,12 @@ impl fmt::Debug for ApiKey {
 pub struct ApiSecret(Box<str>);
 
 impl ApiSecret {
+    /// Wraps `secret` as an [`ApiSecret`].
     pub fn new(secret: impl Into<Box<str>>) -> Self {
         Self(secret.into())
     }
 
+    /// Returns the secret as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

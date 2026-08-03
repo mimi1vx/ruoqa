@@ -35,24 +35,28 @@ impl Default for Timeouts {
 }
 
 impl Timeouts {
+    /// Sets the connect timeout.
     #[must_use]
     pub fn connect(mut self, connect: Duration) -> Self {
         self.connect = connect;
         self
     }
 
+    /// Sets the per-read inactivity timeout.
     #[must_use]
     pub fn read(mut self, read: Duration) -> Self {
         self.read = read;
         self
     }
 
+    /// Sets the whole-request timeout.
     #[must_use]
     pub fn total(mut self, total: Duration) -> Self {
         self.total = total;
         self
     }
 
+    /// Sets the idle-connection pool timeout.
     #[must_use]
     pub fn pool_idle(mut self, pool_idle: Duration) -> Self {
         self.pool_idle = pool_idle;
@@ -73,6 +77,8 @@ pub trait Rng: std::fmt::Debug {
 pub struct DefaultRng(u64);
 
 impl DefaultRng {
+    /// Builds a `DefaultRng` from `seed`. A zero seed is remapped to a fixed
+    /// nonzero constant, since a zero xorshift64* state never changes.
     #[must_use]
     pub fn from_seed(seed: u64) -> Self {
         Self(if seed == 0 {
@@ -120,9 +126,13 @@ impl Rng for DefaultRng {
 /// what backoff.
 #[derive(Debug)]
 pub struct RetryPolicy {
+    /// Maximum number of retry attempts after the initial try.
     pub max_retries: u32,
+    /// Backoff before the first retry.
     pub initial_backoff: Duration,
+    /// Growth factor applied to the backoff on each subsequent retry.
     pub multiplier: f64,
+    /// Upper bound on the (pre-jitter) backoff.
     pub max_backoff: Duration,
     /// Whole-retry-loop deadline, on top of `max_retries`.
     pub deadline: Option<Duration>,
@@ -130,7 +140,9 @@ pub struct RetryPolicy {
     pub honor_retry_after: bool,
     /// Cap on a `Retry-After` value, to defend against a hostile/absurd header.
     pub max_retry_after: Duration,
+    /// HTTP status codes that trigger a retry.
     pub retry_statuses: HashSet<StatusCode>,
+    /// HTTP methods eligible for retry on a transport error.
     pub retry_methods: HashSet<Method>,
     rng: Box<dyn Rng + Send>,
 }
@@ -177,54 +189,63 @@ impl RetryPolicy {
         }
     }
 
+    /// Sets the maximum number of retry attempts.
     #[must_use]
     pub fn max_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = max_retries;
         self
     }
 
+    /// Sets the initial backoff.
     #[must_use]
     pub fn initial_backoff(mut self, initial_backoff: Duration) -> Self {
         self.initial_backoff = initial_backoff;
         self
     }
 
+    /// Sets the backoff growth factor.
     #[must_use]
     pub fn multiplier(mut self, multiplier: f64) -> Self {
         self.multiplier = multiplier;
         self
     }
 
+    /// Sets the backoff cap.
     #[must_use]
     pub fn max_backoff(mut self, max_backoff: Duration) -> Self {
         self.max_backoff = max_backoff;
         self
     }
 
+    /// Sets the whole-retry-loop deadline.
     #[must_use]
     pub fn deadline(mut self, deadline: Option<Duration>) -> Self {
         self.deadline = deadline;
         self
     }
 
+    /// Sets whether a `Retry-After` response header is honored.
     #[must_use]
     pub fn honor_retry_after(mut self, honor_retry_after: bool) -> Self {
         self.honor_retry_after = honor_retry_after;
         self
     }
 
+    /// Sets the cap applied to a `Retry-After` value.
     #[must_use]
     pub fn max_retry_after(mut self, max_retry_after: Duration) -> Self {
         self.max_retry_after = max_retry_after;
         self
     }
 
+    /// Sets the HTTP status codes that trigger a retry.
     #[must_use]
     pub fn retry_statuses(mut self, retry_statuses: HashSet<StatusCode>) -> Self {
         self.retry_statuses = retry_statuses;
         self
     }
 
+    /// Sets the HTTP methods eligible for retry on a transport error.
     #[must_use]
     pub fn retry_methods(mut self, retry_methods: HashSet<Method>) -> Self {
         self.retry_methods = retry_methods;

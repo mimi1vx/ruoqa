@@ -13,16 +13,22 @@ pub enum Error {
     /// The server responded with a non-success HTTP status.
     #[error("{method} {url} returned {status}")]
     Request {
+        /// The HTTP method that was sent.
         method: reqwest::Method,
+        /// The URL that returned the error.
         url: url::Url,
+        /// The response's HTTP status code.
         status: reqwest::StatusCode,
+        /// A truncated preview of the response body.
         body: String,
     },
 
     /// The request could not reach the server.
     #[error("failed to connect to {url}")]
     Connection {
+        /// The URL the connection attempt targeted.
         url: url::Url,
+        /// The underlying transport error.
         #[source]
         source: reqwest::Error,
     },
@@ -41,30 +47,46 @@ pub enum Error {
 
     /// The response body exceeded the configured size limit.
     #[error("response body exceeded the {limit}-byte limit")]
-    BodyTooLarge { limit: usize },
+    BodyTooLarge {
+        /// The configured `max_response_bytes` limit that was exceeded.
+        limit: usize,
+    },
 
     /// The request was redirected more times than allowed.
     #[error("exceeded the maximum of {max} redirects")]
-    TooManyRedirects { max: usize },
+    TooManyRedirects {
+        /// The configured `max_redirects` limit that was exceeded.
+        max: usize,
+    },
 
     /// A redirect pointed at a different origin than the original request.
     #[error("refusing to follow redirect from {from} to a different origin {to}")]
-    CrossOriginRedirect { from: url::Url, to: url::Url },
+    CrossOriginRedirect {
+        /// The URL that issued the redirect.
+        from: url::Url,
+        /// The cross-origin `Location` it pointed to.
+        to: url::Url,
+    },
 
     /// The overall retry deadline elapsed before the request succeeded.
     #[error("deadline exceeded after {elapsed:?}")]
-    DeadlineExceeded { elapsed: Duration },
+    DeadlineExceeded {
+        /// How long the retry loop ran before giving up.
+        elapsed: Duration,
+    },
 
     /// A request path could not be resolved against the client's base URL.
     #[error("invalid request path {path:?}: {source}")]
     InvalidPath {
+        /// The path that failed to resolve.
         path: String,
+        /// The underlying URL-parsing error.
         #[source]
         source: url::ParseError,
     },
 }
 
-/// A specialized [`Result`](std::result::Result) using [`Error`].
+/// A specialized [`Result`](std::result::Result) using [`enum@Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
