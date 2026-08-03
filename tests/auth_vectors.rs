@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reproduces `tests/vectors.json`, generated once from the Python
-//! `openqa_async._auth.OpenQAAuth` implementation. See that file's
-//! `provenance` field for how it was produced.
+//! Reproduces the openQA HMAC-SHA1 signing golden vectors in
+//! `tests/vectors.json`. See that file's `provenance` field for how it was
+//! produced.
 
 use ruoqa::secret::ApiSecret;
 use serde_json::Value;

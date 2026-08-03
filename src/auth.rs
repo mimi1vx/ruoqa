@@ -17,7 +17,7 @@ type HmacSha1 = Hmac<Sha1>;
 
 /// The string that gets signed: `path` plus `?query` (if a non-empty query
 /// exists), with the `%20`->`+` and `~`->`%7E` fixups applied to match the
-/// Python client's `requests`-based `path_url` signing byte-for-byte.
+/// wire format the openQA server verifies against.
 #[must_use]
 pub fn signing_string(url: &Url) -> String {
     let mut raw = url.path().to_owned();
@@ -47,9 +47,8 @@ pub fn sign(signing_string: &str, ts: &str, secret: &ApiSecret) -> String {
     hex
 }
 
-/// Seconds since the epoch as a decimal with a fractional part. Python sends
-/// a float, Perl an integer; the server does a numeric `abs()` comparison, so
-/// both parse — this matches Python for testability against its test suite.
+/// Seconds since the epoch as a decimal with a fractional part. The server
+/// does a numeric `abs()` comparison, so an integer or float both parse.
 ///
 /// # Panics
 ///

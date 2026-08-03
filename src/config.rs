@@ -14,8 +14,7 @@ use crate::secret::{ApiKey, ApiSecret};
 /// Resolved server configuration: base URL and (optional) credentials.
 ///
 /// `base_url` is a full [`Url`] (so it carries a trailing `/`); the
-/// scheme+host section-header form Python calls `self.baseurl` is
-/// `base_url.origin().ascii_serialization()`.
+/// scheme+host section-header form is `base_url.origin().ascii_serialization()`.
 #[derive(Debug)]
 pub struct Config {
     /// The resolved base URL, scheme included.
@@ -95,7 +94,7 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
     })
 }
 
-/// `host[:port]`, matching Python's `urlparse(server).netloc`.
+/// `host[:port]`.
 fn netloc(url: &Url) -> String {
     let host = url.host_str().unwrap_or_default();
     match url.port() {
@@ -145,8 +144,7 @@ fn lookup_credentials(
         })
 }
 
-/// `key`/`secret` from a section, trailing-whitespace stripped (the Perl
-/// client does this; Python's `configparser` does not — a real-world
+/// `key`/`secret` from a section, trailing-whitespace stripped (a real-world
 /// footgun worth fixing here).
 fn section_credentials(config: &Ini, section_name: &str) -> Option<(String, String)> {
     let section = config.section(Some(section_name))?;

@@ -657,13 +657,11 @@ async fn read_truncated(resp: &mut reqwest::Response, limit: usize) -> Bytes {
     buf.freeze()
 }
 
-/// Conservative YAML parsing options (see the phase-4 plan's "Watch for"
-/// section): exact `true`/`false` only (no YAML 1.1 `yes`/`no`/`on`/`off`
-/// inference, a deliberate divergence from the Python client's `PyYAML` use),
-/// non-finite floats rejected rather than silently stringified (already the
-/// crate default), and a tighter-than-default alias/event budget since a
-/// response body is at most a few tens of MiB, never the crate's 256 MiB
-/// reader default.
+/// Conservative YAML parsing options: exact `true`/`false` only (no YAML 1.1
+/// `yes`/`no`/`on`/`off` inference), non-finite floats rejected rather than
+/// silently stringified (already the crate default), and a tighter-than-default
+/// alias/event budget since a response body is at most a few tens of MiB, never
+/// the crate's 256 MiB reader default.
 fn yaml_options() -> serde_saphyr::Options {
     serde_saphyr::options! {
         strict_booleans: true,

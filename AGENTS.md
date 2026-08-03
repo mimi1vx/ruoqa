@@ -1,7 +1,7 @@
 # AGENTS.md
 
 `ruoqa` — async openQA REST API client. Single-crate Rust library (no binary),
-edition 2024, MSRV **1.96**. Partial port of the Python `openqa-async` client.
+edition 2024, MSRV **1.96**.
 
 ## Verification (match CI, in this order)
 
@@ -31,11 +31,11 @@ Integration tests live in `tests/` and use `wiremock` (HTTP mocking) and
 
 ## Repo-specific gotchas
 
-- **Auth golden vectors:** `tests/vectors.json` was generated once from the
-  Python `openqa_async._auth.OpenQAAuth`. `tests/auth_vectors.rs` asserts
-  byte-for-byte reproduction of HMAC-SHA1 signing. Do NOT edit the vectors to
-  make a test pass — a diff there means the signing logic (`src/auth.rs`)
-  regressed against wire compatibility.
+- **Auth golden vectors:** `tests/vectors.json` pins the openQA HMAC-SHA1
+  signing wire format. `tests/auth_vectors.rs` asserts byte-for-byte
+  reproduction of the signing. Do NOT edit the vectors to make a test pass — a
+  diff there means the signing logic (`src/auth.rs`) regressed against wire
+  compatibility.
 - **cargo-deny is license-only** (`deny.toml`): allow-list is permissive licenses
   only; `ruoqa` itself is the sole GPL exception. A new dep with a copyleft/
   GPL-incompatible license fails CI by design — don't add it to `exceptions`.
@@ -50,4 +50,4 @@ Integration tests live in `tests/` and use `wiremock` (HTTP mocking) and
 `config.rs` (`client.conf` discovery), `policy.rs` (retry/timeout), `tls.rs`,
 `secret.rs` (zeroized key/secret), `error.rs`, `consts.rs`.
 
-`plans/` holds the port design docs (background only, not build instructions).
+`plans/` holds design docs (background only, not build instructions).

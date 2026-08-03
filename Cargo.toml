@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-or-later"
-description = "Async openQA API client (partial Rust port of openqa-async)"
+description = "Async openQA REST API client"
 repository = "https://github.com/mimi1vx/ruoqa"
 
 [dependencies]

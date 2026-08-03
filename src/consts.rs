@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Job state/result constants duplicated from openQA, mirroring the Python
-//! client's `const.py`. Kept in one place so consumers don't each hardcode
-//! "these are the running states" on their own.
+//! Job state/result constants duplicated from openQA. Kept in one place so
+//! consumers don't each hardcode "these are the running states" on their own.
 //!
 //! `Unknown` (via `#[serde(other)]`) absorbs any state/result a newer server
 //! introduces, so deserializing a response never breaks on an unrecognized
@@ -268,9 +267,9 @@ mod tests {
         assert_eq!(de, JobResult::Unknown);
     }
 
-    // Matches openqa_async.const's Python tuples byte-for-byte.
+    // Matches openQA's `const.py` tuples byte-for-byte.
     #[test]
-    fn state_groups_match_python() {
+    fn state_groups_match_openqa() {
         assert_eq!(
             STATES,
             [
@@ -296,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn result_groups_match_python() {
+    fn result_groups_match_openqa() {
         assert_eq!(
             RESULTS,
             [
@@ -345,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_keys_match_python() {
+    fn scenario_keys_match_openqa() {
         assert_eq!(
             SCENARIO_KEYS,
             ["DISTRI", "VERSION", "FLAVOR", "ARCH", "TEST"]

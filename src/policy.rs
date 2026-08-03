@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Timeout and retry-policy value types. See the master plan for why these
-//! defaults diverge from the Python client's.
+//! Timeout and retry-policy value types.
 
 use std::collections::HashSet;
 use std::num::IntErrorKind;
@@ -65,7 +64,7 @@ impl Timeouts {
 }
 
 /// A source of randomness for backoff jitter, injectable so tests can be
-/// deterministic (mirrors the Python client's `self._rng`).
+/// deterministic.
 pub trait Rng: std::fmt::Debug {
     /// Returns a duration uniformly distributed in `[0, max]`.
     fn uniform(&mut self, max: Duration) -> Duration;
@@ -176,8 +175,8 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Reproduces the Python client's defaults: 5 retries, 10 s initial
-    /// backoff, 60 s cap, no overall deadline.
+    /// A more lenient retry profile: 5 retries, 10 s initial backoff, 60 s
+    /// cap, no overall deadline.
     #[must_use]
     pub fn upstream_compat() -> Self {
         Self {
@@ -319,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_compat_matches_python() {
+    fn upstream_compat_values() {
         let p = RetryPolicy::upstream_compat();
         assert_eq!(p.max_retries, 5);
         assert_eq!(p.initial_backoff, Duration::from_secs(10));

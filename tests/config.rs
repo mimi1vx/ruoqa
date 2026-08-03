@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Ports all scenarios from `tests/test_config.py` (the Python original),
-//! driven over an injectable path list so no test touches the real `$HOME`
-//! or `/etc/openqa` and the suite stays parallel-safe.
+//! `client.conf` discovery scenarios, driven over an injectable path list so
+//! no test touches the real `$HOME` or `/etc/openqa` and the suite stays
+//! parallel-safe.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -52,7 +52,7 @@ fn write_conf(dir: &Path, contents: &str) -> PathBuf {
     path
 }
 
-/// The scheme+host string Python calls `self.baseurl` (no trailing `/`).
+/// The scheme+host string (no trailing `/`).
 fn base_url_str(config: &ruoqa::config::Config) -> String {
     config.base_url.origin().ascii_serialization()
 }
@@ -143,8 +143,7 @@ fn empty_server_no_config_defaults_to_localhost() {
     assert!(config.api_secret.is_none());
 }
 
-/// Not in the Python suite, but pinned down by the master plan: later files
-/// override earlier ones per-key, matching `configparser.read([a, b])`.
+/// Later files override earlier ones per-key.
 #[test]
 fn later_path_wins_per_key() {
     let dir = tempdir();
@@ -160,8 +159,7 @@ fn later_path_wins_per_key() {
     assert_eq!(config.api_secret.unwrap().as_str(), "FIRST_SECRET");
 }
 
-/// Trailing whitespace on values is stripped (a fix over the Python client,
-/// matching the Perl client's behaviour).
+/// Trailing whitespace on values is stripped.
 #[test]
 fn trailing_whitespace_on_values_is_stripped() {
     let dir = tempdir();

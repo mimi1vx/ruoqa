@@ -1,11 +1,9 @@
 # ruoqa
 
 An async [openQA](https://open.qa/) REST API client, built on
-[`reqwest`](https://docs.rs/reqwest). It is a partial Rust port of
-[`openqa-async`](https://github.com/mimi1vx/openqa-async): HMAC-SHA1 request
-signing, `client.conf` discovery, and a YAML-response fallback, aimed at
-wire compatibility with the openQA server rather than byte-for-byte parity
-with the Python client.
+[`reqwest`](https://docs.rs/reqwest). It provides HMAC-SHA1 request signing,
+`client.conf` discovery, and a YAML-response fallback, aimed at wire
+compatibility with the openQA server.
 
 ## Usage
 
@@ -103,35 +101,30 @@ over plaintext `http` to a non-loopback host.
 | `retry_methods` | GET, HEAD, OPTIONS, PUT, DELETE (not POST) |
 
 Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
-[`RetryPolicy::upstream_compat`] for the Python client's own defaults (5
-retries, 10 s initial backoff, 60 s cap, no deadline).
+[`RetryPolicy::upstream_compat`] for a more lenient profile (5 retries,
+10 s initial backoff, 60 s cap, no deadline).
 
-## Differences from `openqa-async`
+## Behaviour
 
 - **Async only.** No synchronous/blocking facade; bring your own
   `tokio::runtime::Handle::block_on` if you need one.
-- **Better retry/timeout defaults**, not Python parity — see the table
-  above. Use [`RetryPolicy::upstream_compat`] for the old behaviour.
-- **`Accept: application/json`**, not the Python client's literal `Accept: json`.
-- **Restricted, same-origin redirects** (default cap of 3 hops); a
-  cross-origin redirect is an error rather than silently dropping
-  `X-API-Key`/`X-API-Hash` or (worse) forwarding them off-origin.
+- **`Accept: application/json`** on every request.
+- **Restricted, same-origin redirects** (default cap of 3 hops, configurable
+  via [`ClientBuilder::max_redirects`]); a cross-origin redirect is an error
+  rather than silently dropping `X-API-Key`/`X-API-Hash` or (worse)
+  forwarding them off-origin.
 - **No `$OPENQA_CONFIG` or `$XDG_CONFIG_HOME` support**, and no sub-path
   (`base_url` with a path component) deployments — deliberate non-goals.
 - **No typed openQA response models** — responses are `serde_json::Value`
   (or your own type via [`Client::request_as`]).
 - **No CLI binary.**
-- Response bodies are capped (32 MiB by default) unless read via
+- Response bodies are capped (32 MiB by default, configurable via
+  [`ClientBuilder::max_response_bytes`]) unless read via
   [`Client::send_raw`].
 
 ## License
 
 GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYING).
-
-This is a derivative of
-[`mimi1vx/openqa-async`](https://github.com/mimi1vx/openqa-async)
-(GPL-2.0-or-later); its "or later" clause permits distributing this port
-under GPL-3.0-or-later.
 
 [`Client::send_raw`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.send_raw
 [`Client::request_as`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_as
@@ -139,3 +132,5 @@ under GPL-3.0-or-later.
 [`Timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.Timeouts.html
 [`RetryPolicy`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.RetryPolicy.html
 [`RetryPolicy::upstream_compat`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.RetryPolicy.html#method.upstream_compat
+[`ClientBuilder::max_redirects`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.max_redirects
+[`ClientBuilder::max_response_bytes`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.max_response_bytes
