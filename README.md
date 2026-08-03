@@ -36,7 +36,12 @@ type instead of a generic `serde_json::Value`.
 Credentials are read from INI-style `client.conf` files, searched in order:
 
 1. `/etc/openqa/client.conf`
-2. `~/.config/openqa/client.conf`
+2. `$XDG_CONFIG_HOME/openqa/client.conf` (only when `$XDG_CONFIG_HOME` is set
+   and absolute), else `~/.config/openqa/client.conf`
+
+If `$OPENQA_CONFIG` is set, it is a directory that **exclusively overrides**
+this search: only `$OPENQA_CONFIG/client.conf` is read, and `/etc` and the
+user config dir are not consulted.
 
 Each section is keyed by the server host (or full base URL) and provides the
 API `key`/`secret`:
@@ -113,8 +118,8 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
   via [`ClientBuilder::max_redirects`]); a cross-origin redirect is an error
   rather than silently dropping `X-API-Key`/`X-API-Hash` or (worse)
   forwarding them off-origin.
-- **No `$OPENQA_CONFIG` or `$XDG_CONFIG_HOME` support**, and no sub-path
-  (`base_url` with a path component) deployments — deliberate non-goals.
+- **No sub-path** (`base_url` with a path component) deployments — a
+  deliberate non-goal.
 - **No typed openQA response models** — responses are `serde_json::Value`
   (or your own type via [`Client::request_as`]).
 - **No CLI binary.**

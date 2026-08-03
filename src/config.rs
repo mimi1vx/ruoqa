@@ -25,14 +25,47 @@ pub struct Config {
     pub api_secret: Option<ApiSecret>,
 }
 
-/// The default `client.conf` search path: `/etc/openqa/client.conf` then
-/// `~/.config/openqa/client.conf`. `$HOME` is read directly; there is no
-/// `$OPENQA_CONFIG` or `XDG_CONFIG_HOME` support (deliberate non-goals).
+/// The default `client.conf` search path.
+///
+/// When `$OPENQA_CONFIG` is set (and non-empty) it is an **exclusive
+/// override**: the only path searched is `$OPENQA_CONFIG/client.conf`, and
+/// `/etc` and the user config dir are not consulted. Otherwise the search is
+/// `/etc/openqa/client.conf` then the user config dir's `openqa/client.conf`,
+/// where the user config dir is `$XDG_CONFIG_HOME` when set, non-empty, and
+/// absolute, else `$HOME/.config`. This is a deliberate divergence from the
+/// Python client's fixed two-path merge.
 #[must_use]
 pub fn default_paths() -> Vec<PathBuf> {
+    paths_from_env(
+        std::env::var("OPENQA_CONFIG").ok().as_deref(),
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// Pure helper behind [`default_paths`]; see its docs for the semantics.
+/// Empty strings are treated as unset.
+fn paths_from_env(
+    openqa_config: Option<&str>,
+    xdg: Option<&str>,
+    home: Option<&str>,
+) -> Vec<PathBuf> {
+    fn non_empty(s: Option<&str>) -> Option<&str> {
+        s.filter(|s| !s.is_empty())
+    }
+
+    if let Some(dir) = non_empty(openqa_config) {
+        return vec![Path::new(dir).join("client.conf")];
+    }
+
     let mut paths = vec![PathBuf::from("/etc/openqa/client.conf")];
-    if let Ok(home) = std::env::var("HOME") {
-        paths.push(Path::new(&home).join(".config/openqa/client.conf"));
+    match non_empty(xdg).filter(|x| Path::new(x).is_absolute()) {
+        Some(xdg) => paths.push(Path::new(xdg).join("openqa/client.conf")),
+        None => {
+            if let Some(home) = non_empty(home) {
+                paths.push(Path::new(home).join(".config/openqa/client.conf"));
+            }
+        }
     }
     paths
 }
@@ -151,4 +184,87 @@ fn section_credentials(config: &Ini, section_name: &str) -> Option<(String, Stri
     let key = section.get("key")?.trim_end().to_owned();
     let secret = section.get("secret")?.trim_end().to_owned();
     Some((key, secret))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_search_order() {
+        let paths = paths_from_env(None, None, Some("/home/u"));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/etc/openqa/client.conf"),
+                PathBuf::from("/home/u/.config/openqa/client.conf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn openqa_config_is_exclusive() {
+        let paths = paths_from_env(Some("/tmp/x"), None, Some("/home/u"));
+        assert_eq!(paths, vec![PathBuf::from("/tmp/x/client.conf")]);
+    }
+
+    #[test]
+    fn openqa_config_wins_over_xdg_and_home() {
+        let paths = paths_from_env(Some("/tmp/x"), Some("/tmp/cfg"), Some("/home/u"));
+        assert_eq!(paths, vec![PathBuf::from("/tmp/x/client.conf")]);
+    }
+
+    #[test]
+    fn absolute_xdg_replaces_home() {
+        let paths = paths_from_env(None, Some("/tmp/cfg"), Some("/home/u"));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/etc/openqa/client.conf"),
+                PathBuf::from("/tmp/cfg/openqa/client.conf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn relative_xdg_falls_back_to_home() {
+        let paths = paths_from_env(None, Some("relative/cfg"), Some("/home/u"));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/etc/openqa/client.conf"),
+                PathBuf::from("/home/u/.config/openqa/client.conf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_xdg_falls_back_to_home() {
+        let paths = paths_from_env(None, Some(""), Some("/home/u"));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/etc/openqa/client.conf"),
+                PathBuf::from("/home/u/.config/openqa/client.conf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_openqa_config_is_unset() {
+        let paths = paths_from_env(Some(""), None, Some("/home/u"));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/etc/openqa/client.conf"),
+                PathBuf::from("/home/u/.config/openqa/client.conf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_home_yields_single_etc_entry() {
+        let paths = paths_from_env(None, None, None);
+        assert_eq!(paths, vec![PathBuf::from("/etc/openqa/client.conf")]);
+    }
 }
