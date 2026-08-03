@@ -309,6 +309,18 @@ impl Client {
         &self.inner.base_url
     }
 
+    /// Resolves `path` against the client's base URL.
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
+    fn join(&self, path: &str) -> Result<Url> {
+        self.inner
+            .base_url
+            .join(path)
+            .map_err(|source| Error::InvalidPath {
+                path: path.to_owned(),
+                source,
+            })
+    }
+
     /// Resolves `path` against the client's base URL and, for `body`,
     /// serializes it as a JSON request body (`Content-Type: application/json`).
     ///
@@ -323,14 +335,7 @@ impl Client {
         path: &str,
         body: Option<&Value>,
     ) -> Result<PreparedRequest> {
-        let url = self
-            .inner
-            .base_url
-            .join(path)
-            .map_err(|source| Error::InvalidPath {
-                path: path.to_owned(),
-                source,
-            })?;
+        let url = self.join(path)?;
 
         let mut headers = HeaderMap::new();
         let body = match body {
@@ -350,6 +355,42 @@ impl Client {
         })
     }
 
+    /// Resolves `path` against the client's base URL and encodes `form` as
+    /// an `application/x-www-form-urlencoded` request body, the content type
+    /// openQA's `POST /api/v1/isos` (and other write endpoints) expect
+    /// instead of JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidPath`] if `path` cannot be joined onto the
+    /// base URL.
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
+    pub fn prepare_form(
+        &self,
+        method: Method,
+        path: &str,
+        form: &[(&str, &str)],
+    ) -> Result<PreparedRequest> {
+        let url = self.join(path)?;
+
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(form)
+            .finish();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+
+        Ok(PreparedRequest {
+            method,
+            url,
+            headers,
+            body: Some(Bytes::from(body)),
+        })
+    }
+
     /// Sends `method path` with an optional JSON `body` and parses the
     /// response as JSON or YAML (see [`Client::send_raw`] to bypass parsing
     /// and the response-size cap).
@@ -359,6 +400,31 @@ impl Client {
     /// See [`Client::execute`] and the module docs for the full error list.
     pub async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let prepared = self.prepare(method, path, body)?;
+        let mut resp = self.execute(&prepared, false).await?;
+        self.handle_response(&prepared, &mut resp).await
+    }
+
+    /// Like [`Client::request`], sending `form` as an
+    /// `application/x-www-form-urlencoded` body via [`Client::prepare_form`]
+    /// instead of a JSON one.
+    ///
+    /// Unlike [`Client::request`], transport-error retries are never
+    /// attempted: openQA's form-encoded write endpoints (e.g.
+    /// `POST /api/v1/isos`) are not idempotent, and retrying a request whose
+    /// response was lost could schedule duplicate jobs. Use
+    /// [`Client::prepare_form`] with [`Client::execute`] directly if you want
+    /// that retried.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::request`].
+    pub async fn request_form(
+        &self,
+        method: Method,
+        path: &str,
+        form: &[(&str, &str)],
+    ) -> Result<Value> {
+        let prepared = self.prepare_form(method, path, form)?;
         let mut resp = self.execute(&prepared, false).await?;
         self.handle_response(&prepared, &mut resp).await
     }
@@ -703,6 +769,72 @@ mod tests {
     use tracing_test::traced_test;
 
     use super::*;
+
+    fn test_client() -> Client {
+        ClientBuilder::new()
+            .server("localhost:9526")
+            .config_paths(vec![])
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn prepare_form_sets_urlencoded_content_type_and_body() {
+        let client = test_client();
+        let prepared = client
+            .prepare_form(
+                Method::POST,
+                "/api/v1/isos",
+                &[("DISTRI", "opensuse"), ("VERSION", "Tumbleweed")],
+            )
+            .unwrap();
+        assert_eq!(
+            prepared.headers.get(CONTENT_TYPE).unwrap(),
+            "application/x-www-form-urlencoded"
+        );
+        assert_eq!(
+            prepared.body.unwrap().as_ref(),
+            b"DISTRI=opensuse&VERSION=Tumbleweed".as_slice()
+        );
+    }
+
+    #[test]
+    fn prepare_form_percent_encodes_values() {
+        let client = test_client();
+        let prepared = client
+            .prepare_form(
+                Method::POST,
+                "/api/v1/isos",
+                &[("A", "a b"), ("B", "a&b"), ("C", "a~b")],
+            )
+            .unwrap();
+        assert_eq!(
+            prepared.body.unwrap().as_ref(),
+            b"A=a+b&B=a%26b&C=a%7Eb".as_slice()
+        );
+    }
+
+    #[test]
+    fn prepare_form_preserves_duplicate_keys_in_order() {
+        let client = test_client();
+        let prepared = client
+            .prepare_form(Method::POST, "/api/v1/isos", &[("k", "1"), ("k", "2")])
+            .unwrap();
+        assert_eq!(prepared.body.unwrap().as_ref(), b"k=1&k=2".as_slice());
+    }
+
+    #[test]
+    fn prepare_form_with_empty_slice_sends_empty_body_with_content_type() {
+        let client = test_client();
+        let prepared = client
+            .prepare_form(Method::POST, "/api/v1/isos", &[])
+            .unwrap();
+        assert_eq!(
+            prepared.headers.get(CONTENT_TYPE).unwrap(),
+            "application/x-www-form-urlencoded"
+        );
+        assert_eq!(prepared.body.unwrap().as_ref(), b"".as_slice());
+    }
 
     #[test]
     fn builder_defaults() {

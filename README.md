@@ -31,6 +31,30 @@ decoded as JSON. Non-2xx responses become `Error::Request`; use
 asset downloads), and [`Client::request_as`] to deserialize into your own
 type instead of a generic `serde_json::Value`.
 
+openQA's `isos` endpoint, the main way to schedule jobs, expects
+`application/x-www-form-urlencoded` rather than JSON — use
+[`Client::request_form`] for that:
+
+```rust,no_run
+use ruoqa::ClientBuilder;
+
+# async fn run() -> ruoqa::Result<()> {
+let client = ClientBuilder::new()
+    .server("openqa.opensuse.org")
+    .build()?;
+
+let scheduled = client
+    .request_form(
+        reqwest::Method::POST,
+        "/api/v1/isos",
+        &[("DISTRI", "opensuse"), ("VERSION", "Tumbleweed")],
+    )
+    .await?;
+println!("{scheduled}");
+# Ok(())
+# }
+```
+
 ## Configuration
 
 Credentials are read from INI-style `client.conf` files, searched in order:
@@ -148,6 +172,7 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 
 [`Client::send_raw`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.send_raw
 [`Client::request_as`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_as
+[`Client::request_form`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_form
 [`TlsMode`]: https://docs.rs/ruoqa/latest/ruoqa/tls/enum.TlsMode.html
 [`Timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.Timeouts.html
 [`RetryPolicy`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.RetryPolicy.html
