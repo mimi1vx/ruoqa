@@ -1,18 +1,11 @@
 name: release
 
-# release-plz creates the tag and GitHub Release with GITHUB_TOKEN, and GitHub
-# suppresses workflow triggers for events raised by GITHUB_TOKEN. So neither
-# `push: tags` nor `release: published` fires for an automated release — this
-# workflow has to be *called* by release-plz.yml instead. The `push: tags`
-# trigger is kept for hand-pushed tags; `workflow_dispatch` is the manual
-# retry path.
+# Backfill path only: automated releases publish from release-plz.yml, in the
+# same job that cuts the tag. This covers hand-pushed tags and retrying a
+# version whose publish failed after the tag already existed. Both workflow
+# filenames are registered as crates.io trusted publishers — dropping either
+# config breaks the corresponding path with a 400 at token exchange.
 on:
-  workflow_call:
-    inputs:
-      ref:
-        description: Tag to publish from.
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       ref:

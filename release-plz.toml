@@ -1,2 +1,6 @@
 [workspace]
-publish = false # actual `cargo publish` happens via OIDC in release.yml (tag-triggered)
+# release-plz releases in the order tag -> cargo publish -> GitHub Release, so
+# letting it publish keeps a failed `cargo publish` from leaving a GitHub
+# Release that announces a version absent from crates.io (v0.1.2, v0.1.3).
+# The OIDC token is minted by release-plz itself; the job needs id-token: write.
+publish = true
