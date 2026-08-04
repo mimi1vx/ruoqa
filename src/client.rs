@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, LOCATION};
+use reqwest::header::{
+    ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, LOCATION, USER_AGENT,
+};
 use reqwest::{Method, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -39,9 +41,10 @@ pub struct ClientBuilder {
     scheme: String,
     api_key: Option<ApiKey>,
     api_secret: Option<ApiSecret>,
-    timeouts: Timeouts,
+    timeouts: Option<Timeouts>,
     retry: RetryPolicy,
-    tls: TlsMode,
+    tls: Option<TlsMode>,
+    http_client: Option<reqwest::Client>,
     max_response_bytes: usize,
     max_redirects: usize,
     user_agent: String,
@@ -58,6 +61,7 @@ impl fmt::Debug for ClientBuilder {
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("tls", &self.tls)
+            .field("http_client", &self.http_client.is_some())
             .field("max_response_bytes", &self.max_response_bytes)
             .field("max_redirects", &self.max_redirects)
             .field("user_agent", &self.user_agent)
@@ -73,9 +77,10 @@ impl Default for ClientBuilder {
             scheme: String::new(),
             api_key: None,
             api_secret: None,
-            timeouts: Timeouts::default(),
+            timeouts: None,
             retry: RetryPolicy::default(),
-            tls: TlsMode::default(),
+            tls: None,
+            http_client: None,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             max_redirects: DEFAULT_MAX_REDIRECTS,
             user_agent: format!("ruoqa/{}", env!("CARGO_PKG_VERSION")),
@@ -123,9 +128,13 @@ impl ClientBuilder {
     }
 
     /// Overrides the connect/read/total/pool-idle timeouts.
+    ///
+    /// Mutually exclusive with [`ClientBuilder::http_client`]: an injected
+    /// `reqwest::Client` owns its own timeout configuration, so combining
+    /// the two is a [`ClientBuilder::build`] error.
     #[must_use]
     pub fn timeouts(mut self, timeouts: Timeouts) -> Self {
-        self.timeouts = timeouts;
+        self.timeouts = Some(timeouts);
         self
     }
 
@@ -137,9 +146,13 @@ impl ClientBuilder {
     }
 
     /// Overrides TLS certificate verification behaviour.
+    ///
+    /// Mutually exclusive with [`ClientBuilder::http_client`]: an injected
+    /// `reqwest::Client` owns its own TLS configuration, so combining the
+    /// two is a [`ClientBuilder::build`] error.
     #[must_use]
     pub fn tls(mut self, tls: TlsMode) -> Self {
-        self.tls = tls;
+        self.tls = Some(tls);
         self
     }
 
@@ -165,6 +178,34 @@ impl ClientBuilder {
         self
     }
 
+    /// Supplies a pre-built `reqwest::Client` instead of letting
+    /// [`ClientBuilder::build`] construct one, e.g. to share a connection
+    /// pool or proxy configuration with the rest of your application.
+    ///
+    /// `Accept: application/json`, `X-API-Key`, and `User-Agent` are still
+    /// injected by `ruoqa` (as insert-if-absent headers on every outgoing
+    /// request), so [`ClientBuilder::user_agent`] and credentials keep
+    /// working on an injected client.
+    ///
+    /// The caller **must** configure `client` with:
+    /// - `redirect::Policy::none()` — `ruoqa` follows redirects itself and
+    ///   refuses cross-origin hops; reqwest does **not** strip custom
+    ///   `X-API-*` headers on a cross-origin redirect, so leaving reqwest's
+    ///   redirect policy on would leak credentials off-origin.
+    /// - `retry::never()` — `ruoqa` re-signs every attempt; a reqwest-level
+    ///   retry replays a stale signature (the server's tolerance is 300 s)
+    ///   and can duplicate non-idempotent writes.
+    ///
+    /// Mutually exclusive with [`ClientBuilder::tls`] and
+    /// [`ClientBuilder::timeouts`]: the injected client owns its own TLS and
+    /// timeout configuration, so combining either with `http_client` is a
+    /// [`ClientBuilder::build`] error.
+    #[must_use]
+    pub fn http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
+        self
+    }
+
     /// Overrides the `client.conf` search path used by [`ClientBuilder::build`].
     ///
     /// Unset (the default) searches [`config::default_paths`]. An empty
@@ -176,21 +217,35 @@ impl ClientBuilder {
         self
     }
 
-    /// Resolves `client.conf`, builds the underlying `reqwest::Client`, and
-    /// returns a ready-to-use [`Client`].
+    /// Resolves `client.conf`, builds the underlying `reqwest::Client` (or
+    /// takes the one from [`ClientBuilder::http_client`]), and returns a
+    /// ready-to-use [`Client`].
     ///
-    /// Automatic redirects and retries are disabled on the underlying
-    /// `reqwest::Client` (`redirect::Policy::none()`,
+    /// Automatic redirects and retries are disabled on a
+    /// `reqwest::Client` built here (`redirect::Policy::none()`,
     /// `reqwest::retry::never()`): [`Client`] implements both itself, since
-    /// they must re-sign every attempt.
+    /// they must re-sign every attempt. An injected `http_client` must
+    /// configure the same, per its docs.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Config`] if `client.conf` fails to parse, or
-    /// [`Error::Tls`] if the underlying HTTP client fails to build (usually a
-    /// bad custom CA bundle).
+    /// Returns [`Error::Config`] if `client.conf` fails to parse, or the
+    /// `User-Agent`/API key contain characters invalid in a header value;
+    /// [`Error::Tls`] if the underlying HTTP client fails to build (usually
+    /// a bad custom CA bundle); or [`Error::IncompatibleHttpClient`] if
+    /// [`ClientBuilder::http_client`] is combined with
+    /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`].
     #[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
     pub fn build(self) -> Result<Client> {
+        if self.http_client.is_some() {
+            if self.tls.is_some() {
+                return Err(Error::IncompatibleHttpClient { option: "tls" });
+            }
+            if self.timeouts.is_some() {
+                return Err(Error::IncompatibleHttpClient { option: "timeouts" });
+            }
+        }
+
         let config_paths = self.config_paths.unwrap_or_else(config::default_paths);
         let resolved = config::resolve(&config_paths, &self.server, &self.scheme)?;
         let api_key = self.api_key.or(resolved.api_key);
@@ -207,27 +262,33 @@ impl ClientBuilder {
             );
         }
 
-        let mut default_headers = HeaderMap::new();
-        default_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        let mut base_headers = HeaderMap::new();
+        base_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        base_headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&self.user_agent).map_err(|e| Error::Config(Box::new(e)))?,
+        );
         if let Some(key) = &api_key {
-            default_headers.insert(
+            base_headers.insert(
                 HeaderName::from_static(X_API_KEY),
                 HeaderValue::from_str(key.as_str()).map_err(|e| Error::Config(Box::new(e)))?,
             );
         }
 
-        let mut builder = reqwest::ClientBuilder::new()
-            .user_agent(self.user_agent)
-            .default_headers(default_headers)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(self.timeouts.connect)
-            .read_timeout(self.timeouts.read)
-            .timeout(self.timeouts.total)
-            .pool_idle_timeout(self.timeouts.pool_idle);
-        builder = self.tls.apply(builder);
-
-        let http = builder.build().map_err(|e| Error::Tls(Box::new(e)))?;
+        let http = if let Some(http_client) = self.http_client {
+            http_client
+        } else {
+            let timeouts = self.timeouts.unwrap_or_default();
+            let mut builder = reqwest::ClientBuilder::new()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(timeouts.connect)
+                .read_timeout(timeouts.read)
+                .timeout(timeouts.total)
+                .pool_idle_timeout(timeouts.pool_idle);
+            builder = self.tls.unwrap_or_default().apply(builder);
+            builder.build().map_err(|e| Error::Tls(Box::new(e)))?
+        };
 
         Ok(Client {
             inner: Arc::new(Inner {
@@ -238,6 +299,7 @@ impl ClientBuilder {
                 max_response_bytes: self.max_response_bytes,
                 max_redirects: self.max_redirects,
                 retry: Mutex::new(self.retry),
+                base_headers,
             }),
         })
     }
@@ -262,6 +324,11 @@ struct Inner {
     max_response_bytes: usize,
     max_redirects: usize,
     retry: Mutex<RetryPolicy>,
+    /// `Accept`, `User-Agent`, and `X-API-Key`, injected insert-if-absent at
+    /// sign time rather than via `reqwest::ClientBuilder::default_headers`,
+    /// so they still apply when the caller supplies their own
+    /// `reqwest::Client` via [`ClientBuilder::http_client`].
+    base_headers: HeaderMap,
 }
 
 /// An async openQA API client. Cheaply cloneable (an `Arc` internally), like
@@ -602,6 +669,11 @@ impl Client {
     fn sign(&self, prepared: &PreparedRequest) -> reqwest::Request {
         let mut headers = prepared.headers.clone();
         auth::apply(&mut headers, &prepared.url, self.inner.api_secret.as_ref());
+        for (name, value) in &self.inner.base_headers {
+            if !headers.contains_key(name) {
+                headers.insert(name.clone(), value.clone());
+            }
+        }
 
         let mut req = reqwest::Request::new(prepared.method.clone(), prepared.url.clone());
         *req.headers_mut() = headers;
@@ -909,6 +981,46 @@ mod tests {
             .build()
             .unwrap();
         assert!(!logs_contain("plaintext"));
+    }
+
+    #[test]
+    fn http_client_with_tls_is_incompatible() {
+        let err = ClientBuilder::new()
+            .server("localhost:9526")
+            .http_client(reqwest::Client::new())
+            .tls(TlsMode::danger_accept_invalid_certs())
+            .config_paths(vec![])
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompatibleHttpClient { option: "tls" }
+        ));
+    }
+
+    #[test]
+    fn http_client_with_timeouts_is_incompatible() {
+        let err = ClientBuilder::new()
+            .server("localhost:9526")
+            .http_client(reqwest::Client::new())
+            .timeouts(Timeouts::default())
+            .config_paths(vec![])
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompatibleHttpClient { option: "timeouts" }
+        ));
+    }
+
+    #[test]
+    fn http_client_alone_builds_ok() {
+        ClientBuilder::new()
+            .server("localhost:9526")
+            .http_client(reqwest::Client::new())
+            .config_paths(vec![])
+            .build()
+            .unwrap();
     }
 
     #[test]

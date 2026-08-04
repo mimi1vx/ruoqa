@@ -84,6 +84,16 @@ pub enum Error {
         #[source]
         source: url::ParseError,
     },
+
+    /// `http_client` was combined with a builder option the injected
+    /// client owns itself.
+    #[error(
+        "`http_client` cannot be combined with `{option}`: the injected reqwest::Client owns its own TLS and timeout configuration"
+    )]
+    IncompatibleHttpClient {
+        /// The conflicting builder option (`"tls"` or `"timeouts"`).
+        option: &'static str,
+    },
 }
 
 /// A specialized [`Result`](std::result::Result) using [`enum@Error`].
