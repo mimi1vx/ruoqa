@@ -112,6 +112,47 @@ also pass a fully-qualified server such as `http://openqa.internal`.
 A warning is also logged via `tracing::warn!` if credentials would be sent
 over plaintext `http` to a non-loopback host.
 
+## Bring your own `reqwest::Client`
+
+[`ClientBuilder::http_client`] takes a pre-built `reqwest::Client` instead of
+letting `ruoqa` construct one, e.g. to share a connection pool or proxy
+configuration with the rest of your application. `Accept: application/json`,
+`X-API-Key`, and `User-Agent` are still injected by `ruoqa` on every
+outgoing request.
+
+```rust,no_run
+use ruoqa::ClientBuilder;
+
+# async fn run() -> ruoqa::Result<()> {
+let http_client = reqwest::Client::builder()
+    .redirect(reqwest::redirect::Policy::none())
+    .retry(reqwest::retry::never())
+    .build()
+    .expect("reqwest::Client should build");
+
+let client = ClientBuilder::new()
+    .server("openqa.opensuse.org")
+    .http_client(http_client)
+    .build()?;
+# let _ = client;
+# Ok(())
+# }
+```
+
+The injected client **must** disable reqwest's own redirects and retries:
+
+- `redirect::Policy::none()` — `ruoqa` follows redirects itself and refuses
+  cross-origin hops; reqwest does **not** strip custom `X-API-*` headers on a
+  cross-origin redirect, so leaving reqwest's redirect policy on would leak
+  credentials off-origin.
+- `retry::never()` — `ruoqa` re-signs every attempt; a reqwest-level retry
+  replays a stale signature (the server's tolerance is 300 s) and can
+  duplicate non-idempotent writes.
+
+[`ClientBuilder::tls`]/[`ClientBuilder::timeouts`] are the caller's
+responsibility on an injected client, so calling either alongside
+`http_client` is a `build()` error.
+
 ## Defaults
 
 | [`Timeouts`] | Value |
@@ -180,3 +221,6 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 [`ClientBuilder::max_redirects`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.max_redirects
 [`ClientBuilder::max_response_bytes`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.max_response_bytes
 [`ClientBuilder::config_paths`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.config_paths
+[`ClientBuilder::http_client`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.http_client
+[`ClientBuilder::tls`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.tls
+[`ClientBuilder::timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.timeouts

@@ -145,6 +145,14 @@ async fn see_other_redirect_converts_to_get_and_drops_body() {
         received[1].body.is_empty(),
         "303 must drop the original body"
     );
+    assert!(
+        received[1].headers.contains_key("x-api-key"),
+        "a 303's header reset must not drop auth: x-api-key"
+    );
+    assert!(
+        received[1].headers.contains_key("x-api-hash"),
+        "a 303's header reset must not drop auth: x-api-hash"
+    );
 }
 
 #[tokio::test]
