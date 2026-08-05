@@ -195,6 +195,7 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 - Response bodies are capped (32 MiB by default, configurable via
   [`ClientBuilder::max_response_bytes`]) unless read via
   [`Client::send_raw`].
+- URLs are userinfo-redacted wherever they appear in errors or logs.
 
 ## Versioning
 

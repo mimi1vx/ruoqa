@@ -114,8 +114,20 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
         .clone_into(&mut scheme);
     }
 
-    let base_url =
+    let mut base_url =
         Url::parse(&format!("{scheme}://{server}")).map_err(|e| Error::Config(Box::new(e)))?;
+
+    // `netloc()` above already drops userinfo for the `http…`-prefixed form;
+    // this covers the bare-authority form (e.g. `alice:s3cret@host`), which
+    // skips `netloc()` and reaches `Url::parse` untouched. Never echoes the
+    // credentials: userinfo never authenticated a ruoqa request (see
+    // plans/url-userinfo-redaction.md), so there's nothing sensitive to
+    // withhold, but no reason to print it either.
+    if !base_url.username().is_empty() || base_url.password().is_some() {
+        tracing::warn!("dropping userinfo from server URL: it does not authenticate requests");
+        let _ = base_url.set_username("");
+        let _ = base_url.set_password(None);
+    }
 
     let base_url_section = base_url.origin().ascii_serialization();
     let (api_key, api_secret) = lookup_credentials(&merged, &server, &base_url_section);
@@ -127,7 +139,10 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
     })
 }
 
-/// `host[:port]`.
+/// `host[:port]`. Unlike Python's `urlparse().netloc`, which includes
+/// userinfo, this deliberately drops it — userinfo is dead weight here (see
+/// the strip in [`resolve`] for the other, bare-authority path it can arrive
+/// by), not a feature to restore.
 fn netloc(url: &Url) -> String {
     let host = url.host_str().unwrap_or_default();
     match url.port() {
@@ -188,7 +203,52 @@ fn section_credentials(config: &Ini, section_name: &str) -> Option<(String, Stri
 
 #[cfg(test)]
 mod tests {
+    use tracing_test::traced_test;
+
     use super::*;
+
+    #[test]
+    fn userinfo_in_bare_authority_server_is_stripped() {
+        let no_paths: [PathBuf; 0] = [];
+        let config = resolve(&no_paths, "alice:s3cret@openqa.example.com", "").unwrap();
+        assert!(config.base_url.username().is_empty());
+        assert!(config.base_url.password().is_none());
+        assert_eq!(config.base_url.host_str(), Some("openqa.example.com"));
+    }
+
+    #[test]
+    fn userinfo_in_config_section_name_is_stripped() {
+        let dir =
+            std::env::temp_dir().join(format!("ruoqa-config-userinfo-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("client.conf");
+        std::fs::write(
+            &path,
+            "[alice:s3cret@openqa.example.com]\nkey = AAAAAAAA\nsecret = BBBBBBBB\n",
+        )
+        .unwrap();
+        let config = resolve(&[&path], "", "").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(config.base_url.username().is_empty());
+        assert!(config.base_url.password().is_none());
+    }
+
+    #[test]
+    #[traced_test]
+    fn stripping_userinfo_warns_without_echoing_it() {
+        let no_paths: [PathBuf; 0] = [];
+        resolve(&no_paths, "alice:s3cret@openqa.example.com", "").unwrap();
+        assert!(logs_contain("dropping userinfo"));
+        assert!(!logs_contain("s3cret"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn no_warning_without_userinfo() {
+        let no_paths: [PathBuf; 0] = [];
+        resolve(&no_paths, "openqa.example.com", "").unwrap();
+        assert!(!logs_contain("userinfo"));
+    }
 
     #[test]
     fn default_search_order() {

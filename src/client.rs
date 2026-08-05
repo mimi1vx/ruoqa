@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::policy::{RetryPolicy, Timeouts};
-use crate::secret::{ApiKey, ApiSecret};
+use crate::secret::{ApiKey, ApiSecret, RedactedUrl};
 use crate::tls::TlsMode;
 use crate::{auth, config};
 
@@ -257,7 +257,7 @@ impl ClientBuilder {
             && !is_loopback_host(&base_url)
         {
             tracing::warn!(
-                url = %base_url,
+                url = %RedactedUrl(&base_url),
                 "sending openQA API credentials over plaintext http to a non-loopback host"
             );
         }
@@ -341,10 +341,11 @@ pub struct Client {
 impl fmt::Debug for Client {
     /// Deliberately does not delegate to the inner `reqwest::Client`'s
     /// `Debug` impl, which would print the `X-API-Key` default header in the
-    /// clear. `ApiKey`/`ApiSecret` redact themselves.
+    /// clear. `ApiKey`/`ApiSecret` redact themselves, and `base_url` is
+    /// redacted here via `RedactedUrl`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
-            .field("base_url", &self.inner.base_url)
+            .field("base_url", &RedactedUrl(&self.inner.base_url))
             .field("api_key", &self.inner.api_key)
             .field("api_secret", &self.inner.api_secret)
             .field("max_response_bytes", &self.inner.max_response_bytes)
@@ -942,6 +943,28 @@ mod tests {
         let debug = format!("{client:?}");
         assert!(!debug.contains("SUPERSECRETKEY"));
         assert!(!debug.contains("SUPERSECRETVALUE"));
+    }
+
+    /// Regression guard for the `Debug` impl's redaction, independent of
+    /// `config::resolve`'s userinfo strip: even a `base_url` built with
+    /// userinfo (bypassing `resolve` entirely) must not leak it here.
+    #[test]
+    fn client_debug_redacts_base_url_userinfo() {
+        let client = Client {
+            inner: Arc::new(Inner {
+                http: reqwest::Client::new(),
+                base_url: Url::parse("https://alice:s3cret@openqa.example.com/").unwrap(),
+                api_key: None,
+                api_secret: None,
+                max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+                max_redirects: DEFAULT_MAX_REDIRECTS,
+                retry: Mutex::new(RetryPolicy::default()),
+                base_headers: HeaderMap::new(),
+            }),
+        };
+        let debug = format!("{client:?}");
+        assert!(!debug.contains("s3cret"));
+        assert!(!debug.contains("alice"));
     }
 
     #[test]

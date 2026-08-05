@@ -6,12 +6,14 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::secret::RedactedUrl;
+
 /// The error type for all fallible `ruoqa` operations.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
     /// The server responded with a non-success HTTP status.
-    #[error("{method} {url} returned {status}")]
+    #[error("{method} {} returned {status}", RedactedUrl(url))]
     Request {
         /// The HTTP method that was sent.
         method: reqwest::Method,
@@ -24,7 +26,7 @@ pub enum Error {
     },
 
     /// The request could not reach the server.
-    #[error("failed to connect to {url}")]
+    #[error("failed to connect to {}", RedactedUrl(url))]
     Connection {
         /// The URL the connection attempt targeted.
         url: url::Url,
@@ -60,7 +62,11 @@ pub enum Error {
     },
 
     /// A redirect pointed at a different origin than the original request.
-    #[error("refusing to follow redirect from {from} to a different origin {to}")]
+    #[error(
+        "refusing to follow redirect from {} to a different origin {}",
+        RedactedUrl(from),
+        RedactedUrl(to)
+    )]
     CrossOriginRedirect {
         /// The URL that issued the redirect.
         from: url::Url,
