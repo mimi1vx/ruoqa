@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 2048 2048" role="img" aria-label="ruoqa logo">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<path fill="#FFFFFF" d="M 0 0 L 2048 0 L 2048 2048 L 0 2048 L 0 0 z"/>
+<rect x="272" y="272" width="1504" height="1504" rx="336" fill="#081E26"/>
+<circle cx="1024" cy="1000" r="404" fill="none" stroke="#FFFFFF" stroke-width="134" stroke-linecap="round" stroke-dasharray="609.2 236.9" transform="rotate(-58.2 1024 1000)"/>
+<path d="M 1146 1122 L 1494 1470" fill="none" stroke="#88B531" stroke-width="134" stroke-linecap="round"/>
+</svg>
