@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/mimi1vx/ruoqa/compare/v0.1.3...v0.1.4) - 2026-08-05
+
+### Fixed
+
+- *(security)* redact URL userinfo from errors, logs, and Debug output
+
+### Other
+
+- add project logo and GitHub social preview header
+- *(release)* let release-plz publish so the tag order fixes itself
+
 ## [0.1.3](https://github.com/mimi1vx/ruoqa/compare/v0.1.2...v0.1.3) - 2026-08-04
 
 ### Added
