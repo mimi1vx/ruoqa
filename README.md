@@ -1,5 +1,8 @@
 # ruoqa
 
+<img src="https://raw.githubusercontent.com/mimi1vx/ruoqa/main/docs/assets/logo.svg"
+     align="right" width="130" alt="ruoqa logo">
+
 An async [openQA](https://open.qa/) REST API client, built on
 [`reqwest`](https://docs.rs/reqwest). It provides HMAC-SHA1 request signing,
 `client.conf` discovery, and a YAML-response fallback, aimed at wire

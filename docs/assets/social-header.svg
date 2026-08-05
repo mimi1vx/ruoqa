@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<rect width="1280" height="640" fill="#081E26"/>
+<rect x="110" y="140" width="360" height="360" rx="56" fill="#FFFFFF"/>
+<g transform="translate(140,170) scale(0.1465)">
+<rect x="0" y="0" width="2048" height="2048" fill="#FFFFFF"/>
+<rect x="272" y="272" width="1504" height="1504" rx="336" fill="#081E26"/>
+<circle cx="1024" cy="1000" r="404" fill="none" stroke="#FFFFFF" stroke-width="134" stroke-linecap="round" stroke-dasharray="609.2 236.9" transform="rotate(-58.2 1024 1000)"/>
+<path d="M 1146 1122 L 1494 1470" fill="none" stroke="#88B531" stroke-width="134" stroke-linecap="round"/>
+</g>
+<text x="560" y="330" font-family="Adwaita Mono, monospace" font-weight="700" font-size="120"><tspan fill="#88B531">$ </tspan><tspan fill="#FFFFFF">ruoqa</tspan></text>
+<text x="560" y="400" font-family="Adwaita Sans, Cantarell, sans-serif" font-size="34" fill="#C7D6DB">Async openQA REST API client</text>
+<text x="560" y="452" font-family="Adwaita Sans, Cantarell, sans-serif" font-size="27" fill="#88B531">HMAC-SHA1 signing &#183; YAML fallback &#183; Rust</text>
+</svg>
