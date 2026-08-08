@@ -1,5 +1,5 @@
 {
-  "provenance": "Golden vectors pinning the openQA HMAC-SHA1 signing wire format, computed at a fixed timestamp per vector. Case 1 is a known-value HMAC; case 2 exercises the %20->+ and ~->%7E path fixups.",
+  "provenance": "Golden vectors pinning the openQA HMAC-SHA1 signing wire format, derived from openQA e72ffeb28b6f77bde9bfcb96f490dd3d7049bf6d (OpenQA::UserAgent::_path_query and the server-side OpenQA::Shared::Controller::Auth::_valid_hmac), computed at a fixed timestamp per vector with an independent HMAC-SHA1 implementation (Python hmac/hashlib), not ruoqa. Case 1 is a known-value HMAC used as a control. Case 2 exercises the %20->+ rewrite scoped to the query, with a literal ~ preserved unchanged. Case 3 pins that the %20->+ rewrite does not apply to the path.",
   "vectors": [
     {
       "secret": "SECRET01",
@@ -12,8 +12,15 @@
       "secret": "SECRET02",
       "url": "https://openqa.example/api/v1/jobs?test=foo bar&u=~name",
       "timestamp": "1700000000.0",
-      "signing_string": "/api/v1/jobs?test=foo+bar&u=%7Ename",
-      "hash": "6cd9bba9e451c1371f77070fa2ddd0ed4444fd1b"
+      "signing_string": "/api/v1/jobs?test=foo+bar&u=~name",
+      "hash": "8f96cb415dd0c377210b8fa22757baa6ce66719e"
+    },
+    {
+      "secret": "SECRET03",
+      "url": "https://openqa.example/api/v1/assets/iso/foo bar.iso?q=a b",
+      "timestamp": "1700000000.0",
+      "signing_string": "/api/v1/assets/iso/foo%20bar.iso?q=a+b",
+      "hash": "5e636398ae7b30b0e1d9a866375029af1b98c187"
     }
   ]
 }
