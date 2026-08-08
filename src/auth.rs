@@ -16,16 +16,16 @@ use crate::secret::ApiSecret;
 type HmacSha1 = Hmac<Sha1>;
 
 /// The string that gets signed: `path` plus `?query` (if a non-empty query
-/// exists), with the `%20`->`+` and `~`->`%7E` fixups applied to match the
-/// wire format the openQA server verifies against.
+/// exists), with `%20`->`+` applied to the query only, matching
+/// `OpenQA::UserAgent::_path_query`. The path is passed through unchanged.
 #[must_use]
 pub fn signing_string(url: &Url) -> String {
-    let mut raw = url.path().to_owned();
+    let mut out = url.path().to_owned();
     if let Some(query) = url.query().filter(|q| !q.is_empty()) {
-        raw.push('?');
-        raw.push_str(query);
+        out.push('?');
+        out.push_str(&query.replace("%20", "+"));
     }
-    raw.replace("%20", "+").replace('~', "%7E")
+    out
 }
 
 /// Lowercase hex HMAC-SHA1 of `signing_string` concatenated with `ts`.
@@ -97,16 +97,33 @@ mod tests {
         assert_eq!(hash, "5dd9172343c3695b1213e78d2a635f31ca475831");
     }
 
-    /// Vector from `tests/test_auth.py::test_path_fixups_space_and_tilde`.
+    /// `%20`->`+` applies to the query only; a literal `~` is left alone.
     #[test]
-    fn path_fixups_space_and_tilde() {
+    fn query_space_becomes_plus_tilde_passes_through() {
         let url = Url::parse("https://openqa.example/api/v1/jobs?test=foo bar&u=~name").unwrap();
         let signing = signing_string(&url);
-        assert_eq!(signing, "/api/v1/jobs?test=foo+bar&u=%7Ename");
+        assert_eq!(signing, "/api/v1/jobs?test=foo+bar&u=~name");
 
         let secret = ApiSecret::new("SECRET02");
         let hash = sign(&signing, "1700000000.0", &secret);
-        assert_eq!(hash, "6cd9bba9e451c1371f77070fa2ddd0ed4444fd1b");
+        assert_eq!(hash, "8f96cb415dd0c377210b8fa22757baa6ce66719e");
+    }
+
+    /// A space in a path segment stays `%20`; only the query's spaces become `+`.
+    #[test]
+    fn path_space_stays_percent_20() {
+        let url = Url::parse("https://openqa.example/api/v1/assets/iso/foo bar.iso?q=a b").unwrap();
+        assert_eq!(
+            signing_string(&url),
+            "/api/v1/assets/iso/foo%20bar.iso?q=a+b"
+        );
+    }
+
+    /// A caller-supplied literal `%7E` in the path is neither encoded nor decoded.
+    #[test]
+    fn path_percent_7e_passes_through_unchanged() {
+        let url = Url::parse("https://openqa.example/api/v1/%7Ename/jobs").unwrap();
+        assert_eq!(signing_string(&url), "/api/v1/%7Ename/jobs");
     }
 
     #[test]
