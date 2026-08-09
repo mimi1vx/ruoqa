@@ -145,8 +145,14 @@ pub struct RetryPolicy {
     pub max_retry_after: Duration,
     /// HTTP status codes that trigger a retry.
     pub retry_statuses: HashSet<StatusCode>,
-    /// HTTP methods eligible for retry on a transport error.
-    pub retry_methods: HashSet<Method>,
+    /// HTTP methods safe to replay, and so eligible for retry on a
+    /// transport error or a retryable status.
+    pub idempotent_methods: HashSet<Method>,
+    /// Opts methods outside `idempotent_methods` into both transport and
+    /// status retries. Only set this if every write this client sends is
+    /// safe to replay: unlike [`Client::execute`](crate::Client::execute)'s
+    /// per-call override, this cannot be locally disabled.
+    pub retry_non_idempotent: bool,
     rng: Box<dyn Rng + Send>,
 }
 
@@ -165,7 +171,7 @@ impl Default for RetryPolicy {
                 .map(StatusCode::from_u16)
                 .map(Result::unwrap)
                 .collect(),
-            retry_methods: [
+            idempotent_methods: [
                 Method::GET,
                 Method::HEAD,
                 Method::OPTIONS,
@@ -173,6 +179,7 @@ impl Default for RetryPolicy {
                 Method::DELETE,
             ]
             .into(),
+            retry_non_idempotent: false,
             rng: Box::new(DefaultRng::default()),
         }
     }
@@ -252,10 +259,21 @@ impl RetryPolicy {
         self
     }
 
-    /// Sets the HTTP methods eligible for retry on a transport error.
+    /// Sets the HTTP methods safe to replay, and so eligible for retry on a
+    /// transport error or a retryable status.
     #[must_use]
-    pub fn retry_methods(mut self, retry_methods: HashSet<Method>) -> Self {
-        self.retry_methods = retry_methods;
+    pub fn idempotent_methods(mut self, idempotent_methods: HashSet<Method>) -> Self {
+        self.idempotent_methods = idempotent_methods;
+        self
+    }
+
+    /// Opts methods outside `idempotent_methods` into both transport and
+    /// status retries. Only set this if every write this client sends is
+    /// safe to replay: unlike [`Client::execute`](crate::Client::execute)'s
+    /// per-call override, this cannot be locally disabled.
+    #[must_use]
+    pub fn retry_non_idempotent(mut self, retry_non_idempotent: bool) -> Self {
+        self.retry_non_idempotent = retry_non_idempotent;
         self
     }
 
@@ -287,21 +305,32 @@ impl RetryPolicy {
         if !self.honor_retry_after {
             return None;
         }
-
-        let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
-
-        let duration = match value.parse::<u64>() {
-            Ok(secs) => Duration::from_secs(secs),
-            Err(e) if *e.kind() == IntErrorKind::PosOverflow => Duration::MAX,
-            Err(_) => {
-                let when = httpdate::parse_http_date(value).ok()?;
-                when.duration_since(SystemTime::now())
-                    .unwrap_or(Duration::ZERO)
-            }
-        };
-
-        Some(duration.min(self.max_retry_after))
+        Some(retry_after_value(headers)?.min(self.max_retry_after))
     }
+}
+
+/// Whether a retryable `status` means the server rejected the request
+/// without acting on it, making a replay safe even for a non-idempotent
+/// method: `429`/`503` carrying a parsable `Retry-After`. Independent of
+/// `honor_retry_after`, which governs the delay, not the signal.
+pub(crate) fn is_backpressure(status: StatusCode, headers: &HeaderMap) -> bool {
+    matches!(status.as_u16(), 429 | 503) && retry_after_value(headers).is_some()
+}
+
+/// Parses a `Retry-After` header — integer seconds or an HTTP-date, clamped
+/// to `>= 0` — with no `honor_retry_after` or `max_retry_after` handling.
+fn retry_after_value(headers: &HeaderMap) -> Option<Duration> {
+    let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
+
+    Some(match value.parse::<u64>() {
+        Ok(secs) => Duration::from_secs(secs),
+        Err(e) if *e.kind() == IntErrorKind::PosOverflow => Duration::MAX,
+        Err(_) => {
+            let when = httpdate::parse_http_date(value).ok()?;
+            when.duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -326,8 +355,8 @@ mod tests {
         assert_eq!(p.deadline, Some(Duration::from_mins(2)));
         assert!(p.honor_retry_after);
         assert!(p.retry_statuses.contains(&StatusCode::TOO_MANY_REQUESTS));
-        assert!(!p.retry_methods.contains(&Method::POST));
-        assert!(p.retry_methods.contains(&Method::GET));
+        assert!(!p.idempotent_methods.contains(&Method::POST));
+        assert!(p.idempotent_methods.contains(&Method::GET));
     }
 
     #[test]
@@ -426,5 +455,46 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(RETRY_AFTER, "5".parse().unwrap());
         assert_eq!(p.parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn is_backpressure_requires_retry_after() {
+        let mut with_retry_after = HeaderMap::new();
+        with_retry_after.insert(RETRY_AFTER, "5".parse().unwrap());
+        let empty = HeaderMap::new();
+        let mut garbage_retry_after = HeaderMap::new();
+        garbage_retry_after.insert(RETRY_AFTER, "banana".parse().unwrap());
+
+        assert!(is_backpressure(
+            StatusCode::TOO_MANY_REQUESTS,
+            &with_retry_after
+        ));
+        assert!(!is_backpressure(StatusCode::TOO_MANY_REQUESTS, &empty));
+        assert!(is_backpressure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &with_retry_after
+        ));
+        assert!(!is_backpressure(StatusCode::SERVICE_UNAVAILABLE, &empty));
+        assert!(!is_backpressure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &with_retry_after
+        ));
+        assert!(!is_backpressure(
+            StatusCode::TOO_MANY_REQUESTS,
+            &garbage_retry_after
+        ));
+    }
+
+    #[test]
+    fn is_backpressure_ignores_honor_retry_after() {
+        // `is_backpressure` is a free function with no `RetryPolicy`, and so
+        // no `honor_retry_after` to consult — the presence of `Retry-After`
+        // is evidence about the server's intent regardless of whether the
+        // caller wants its duration honored.
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, "5".parse().unwrap());
+        let disabled = RetryPolicy::default().honor_retry_after(false);
+        assert_eq!(disabled.parse_retry_after(&headers), None);
+        assert!(is_backpressure(StatusCode::TOO_MANY_REQUESTS, &headers));
     }
 }

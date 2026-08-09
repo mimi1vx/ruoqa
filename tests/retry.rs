@@ -362,6 +362,140 @@ async fn deadline_spans_redirect_hops() {
 }
 
 #[tokio::test]
+async fn post_503_without_retry_after_is_not_retried() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/isos"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&mock_server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(fast_retry(3))
+        .build()
+        .unwrap();
+
+    let err = client
+        .request_form(Method::POST, "/isos", &[("ISO", "x.iso")])
+        .await
+        .expect_err("a bare 503 must not be replayed for a POST");
+    assert!(matches!(
+        err,
+        Error::Request {
+            status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            ..
+        }
+    ));
+    assert_eq!(mock_server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn post_429_with_retry_after_is_retried() {
+    let mock_server = MockServer::start().await;
+    let attempts_429 = Arc::new(AtomicUsize::new(0));
+    let attempts_429_in_mock = attempts_429.clone();
+    Mock::given(method("POST"))
+        .and(path("/isos"))
+        .respond_with(move |_req: &Request| {
+            if attempts_429_in_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(429).insert_header("Retry-After", "0")
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))
+            }
+        })
+        .mount(&mock_server)
+        .await;
+
+    let attempts_503 = Arc::new(AtomicUsize::new(0));
+    let attempts_503_in_mock = attempts_503.clone();
+    Mock::given(method("POST"))
+        .and(path("/other-isos"))
+        .respond_with(move |_req: &Request| {
+            if attempts_503_in_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503).insert_header("Retry-After", "0")
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))
+            }
+        })
+        .mount(&mock_server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(fast_retry(3))
+        .build()
+        .unwrap();
+
+    client
+        .request_form(Method::POST, "/isos", &[("ISO", "x.iso")])
+        .await
+        .expect("429 + Retry-After should be retried and succeed");
+    assert_eq!(attempts_429.load(Ordering::SeqCst), 2);
+
+    client
+        .request_form(Method::POST, "/other-isos", &[("ISO", "x.iso")])
+        .await
+        .expect("503 + Retry-After should be retried and succeed");
+    assert_eq!(attempts_503.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn post_500_is_retried_when_policy_opts_in() {
+    let mock_server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_in_mock = attempts.clone();
+    Mock::given(method("POST"))
+        .and(path("/isos"))
+        .respond_with(move |_req: &Request| {
+            if attempts_in_mock.fetch_add(1, Ordering::SeqCst) < 2 {
+                ResponseTemplate::new(500)
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))
+            }
+        })
+        .mount(&mock_server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(fast_retry(2).retry_non_idempotent(true))
+        .build()
+        .unwrap();
+
+    client
+        .request_form(Method::POST, "/isos", &[("ISO", "x.iso")])
+        .await
+        .expect("retry_non_idempotent(true) should retry a POST 500");
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn post_500_is_retried_when_execute_opts_in() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/isos"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(fast_retry(2))
+        .build()
+        .unwrap();
+
+    let prepared = client
+        .prepare_form(Method::POST, "/isos", &[("ISO", "x.iso")])
+        .unwrap();
+    client
+        .execute(&prepared, true)
+        .await
+        .expect("execute(&prepared, true) should retry a POST 500");
+    assert_eq!(mock_server.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn honor_retry_after_false_ignores_the_header() {
     let mock_server = MockServer::start().await;
     let attempts = Arc::new(AtomicUsize::new(0));
