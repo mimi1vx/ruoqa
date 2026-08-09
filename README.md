@@ -190,7 +190,8 @@ responsibility on an injected client, so calling either alongside
 | `honor_retry_after` | true |
 | `max_retry_after` | 60 s |
 | `retry_statuses` | 408, 413, 429, 444, 500, 502, 503, 504, 509, 521, 522, 599 |
-| `retry_methods` | GET, HEAD, OPTIONS, PUT, DELETE (not POST) |
+| `idempotent_methods` | GET, HEAD, OPTIONS, PUT, DELETE (not POST) |
+| `retry_non_idempotent` | false |
 
 Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 [`RetryPolicy::upstream_compat`] for a more lenient profile (5 retries,
@@ -198,7 +199,10 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 whole [`Client::execute`] call — every attempt, every backoff, and every
 redirect hop — and a request still in flight when it expires is aborted with
 [`Error::DeadlineExceeded`]; the response body is then read under
-[`Timeouts`], not the deadline.
+[`Timeouts`], not the deadline. A retryable status is only replayed for a
+method in `idempotent_methods`, unless the server signalled backpressure
+(`429`/`503` with `Retry-After`) or `retry_non_idempotent` is set; the same
+rule governs transport errors and statuses alike.
 
 ## Behaviour
 
@@ -228,6 +232,9 @@ redirect hop — and a request still in flight when it expires is aborted with
 - URLs are userinfo-redacted wherever they appear in errors or logs.
 - [`Error::DeadlineExceeded`] does not mean the server did not act on the
   request — an aborted in-flight write may already have been committed.
+- A `POST` answered with 500/502/504 (or a bare 503) is surfaced, not
+  replayed — openQA's write routes are not idempotent and the write may
+  already have committed.
 
 ## Versioning
 

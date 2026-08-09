@@ -17,6 +17,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::policy;
 use crate::policy::{RetryPolicy, Timeouts};
 use crate::secret::{ApiKey, ApiSecret, Credentials, RedactedUrl};
 use crate::tls::TlsMode;
@@ -573,12 +574,14 @@ impl Client {
     /// `application/x-www-form-urlencoded` body via [`Client::prepare_form`]
     /// instead of a JSON one.
     ///
-    /// Unlike [`Client::request`], transport-error retries are never
-    /// attempted: openQA's form-encoded write endpoints (e.g.
-    /// `POST /api/v1/isos`) are not idempotent, and retrying a request whose
-    /// response was lost could schedule duplicate jobs. Use
-    /// [`Client::prepare_form`] with [`Client::execute`] directly if you want
-    /// that retried.
+    /// Unlike [`Client::request`], a non-idempotent method (e.g. `POST`) is
+    /// retried neither on a transport error nor on a retryable status:
+    /// openQA's form-encoded write endpoints (e.g. `POST /api/v1/isos`) are
+    /// not idempotent, and retrying a request whose response was lost could
+    /// schedule duplicate jobs. The exceptions are a server signalling
+    /// deliberate backpressure (`429`/`503` with `Retry-After`) or opting in
+    /// via [`RetryPolicy::retry_non_idempotent`]. Use [`Client::prepare_form`]
+    /// with [`Client::execute`] directly for a per-call opt-in.
     ///
     /// # Errors
     ///
@@ -634,12 +637,15 @@ impl Client {
     /// `application/x-www-form-urlencoded` body via [`Client::prepare_form`]
     /// instead of a JSON one.
     ///
-    /// Unlike [`Client::request_typed`], transport-error retries are never
-    /// attempted: openQA's form-encoded write endpoints (e.g.
+    /// Unlike [`Client::request_typed`], a non-idempotent method (e.g.
+    /// `POST`) is retried neither on a transport error nor on a retryable
+    /// status: openQA's form-encoded write endpoints (e.g.
     /// `POST /api/v1/isos`) are not idempotent, and retrying a request whose
-    /// response was lost could schedule duplicate jobs. Use
-    /// [`Client::prepare_form`] with [`Client::execute`] directly if you want
-    /// that retried.
+    /// response was lost could schedule duplicate jobs. The exceptions are a
+    /// server signalling deliberate backpressure (`429`/`503` with
+    /// `Retry-After`) or opting in via [`RetryPolicy::retry_non_idempotent`].
+    /// Use [`Client::prepare_form`] with [`Client::execute`] directly for a
+    /// per-call opt-in.
     ///
     /// # Errors
     ///
@@ -695,8 +701,15 @@ impl Client {
     /// error, as [`Client::request`] does internally).
     ///
     /// `retry_non_idempotent` opts a non-idempotent method (e.g. `POST`) into
-    /// transport-error retries, which are otherwise restricted to
-    /// [`RetryPolicy::retry_methods`].
+    /// both transport-error and retryable-status retries, which are
+    /// otherwise restricted to [`RetryPolicy::idempotent_methods`]. It ORs
+    /// with [`RetryPolicy::retry_non_idempotent`] and cannot turn that flag
+    /// off: setting either is a "this write is safe to replay" statement,
+    /// widening eligibility only ever makes sense in one direction.
+    /// Eligibility is evaluated per redirect hop against that hop's method,
+    /// so a `POST` downgraded to a bodyless `GET` by a `301`/`302`/`303` is
+    /// retryable on the following hop even though the original request was
+    /// not.
     ///
     /// # Errors
     ///
@@ -751,6 +764,45 @@ impl Client {
         }
     }
 
+    /// Whether `method` may be replayed: idempotent by default, or opted in
+    /// per call (`Client::execute`) or per client (`RetryPolicy`).
+    fn method_retryable(&self, method: &Method, opt_in: bool) -> bool {
+        let policy = self.inner.retry.lock().unwrap();
+        opt_in || policy.retry_non_idempotent || policy.idempotent_methods.contains(method)
+    }
+
+    /// Whether `status` on `prepared` should be replayed: it must be in
+    /// `retry_statuses`, and either the method is retryable or the response
+    /// signals deliberate backpressure. Logs when a retryable status is
+    /// withheld solely because of the method, so the missing retry doesn't
+    /// read as a bug.
+    fn status_retryable(
+        &self,
+        prepared: &PreparedRequest,
+        status: StatusCode,
+        headers: &HeaderMap,
+        retry_non_idempotent: bool,
+    ) -> bool {
+        let retryable = self
+            .inner
+            .retry
+            .lock()
+            .unwrap()
+            .retry_statuses
+            .contains(&status);
+        let eligible = retryable
+            && (self.method_retryable(&prepared.method, retry_non_idempotent)
+                || policy::is_backpressure(status, headers));
+        if retryable && !eligible {
+            tracing::debug!(
+                method = %prepared.method,
+                %status,
+                "not retrying a retryable status for a non-idempotent method"
+            );
+        }
+        eligible
+    }
+
     /// The retry loop proper (mirrors `aclient.py::do_request`): retries
     /// transport errors and retryable statuses with jittered, capped
     /// backoff, honoring `Retry-After` and the overall deadline.
@@ -792,14 +844,13 @@ impl Client {
             match outcome {
                 Ok(resp) => {
                     let status = resp.status();
-                    let retryable = self
-                        .inner
-                        .retry
-                        .lock()
-                        .unwrap()
-                        .retry_statuses
-                        .contains(&status);
-                    if !retryable || attempt >= max_retries {
+                    let eligible = self.status_retryable(
+                        prepared,
+                        status,
+                        resp.headers(),
+                        retry_non_idempotent,
+                    );
+                    if !eligible || attempt >= max_retries {
                         return Ok(resp);
                     }
 
@@ -828,14 +879,7 @@ impl Client {
                     tokio::time::sleep(delay).await;
                 }
                 Err(source) => {
-                    let eligible = retry_non_idempotent
-                        || self
-                            .inner
-                            .retry
-                            .lock()
-                            .unwrap()
-                            .retry_methods
-                            .contains(&prepared.method);
+                    let eligible = self.method_retryable(&prepared.method, retry_non_idempotent);
                     if !eligible || attempt >= max_retries {
                         return Err(Error::Connection {
                             url: prepared.url.clone(),
