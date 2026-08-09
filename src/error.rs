@@ -74,6 +74,29 @@ pub enum Error {
         to: url::Url,
     },
 
+    /// A request URL's origin does not match the client's base URL.
+    #[error(
+        "refusing to send {} to a different origin than the base URL {}",
+        RedactedUrl(url),
+        RedactedUrl(base)
+    )]
+    CrossOriginRequest {
+        /// The client's configured base URL.
+        base: url::Url,
+        /// The request URL that resolved to a different origin.
+        url: url::Url,
+    },
+
+    /// A request URL is structurally rejected independent of its origin,
+    /// e.g. a non-relative `path` or userinfo in a resolved URL.
+    #[error("unsupported request URL {}: {reason}", RedactedUrl(url))]
+    UnsupportedRequestUrl {
+        /// The rejected URL.
+        url: url::Url,
+        /// Why it was rejected.
+        reason: &'static str,
+    },
+
     /// The overall retry deadline elapsed before the request succeeded.
     #[error("deadline exceeded after {elapsed:?}")]
     DeadlineExceeded {

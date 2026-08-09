@@ -210,6 +210,10 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
   bodyless `GET`, and only `307`/`308` replay the original method and body.
 - **No sub-path** (`base_url` with a path component) deployments — a
   deliberate non-goal.
+- **Request paths must be relative**, and every request URL — including one
+  in a caller-built [`PreparedRequest`] — is origin-checked against
+  `base_url` before signing, so untrusted input in a path can never send
+  credentials to another origin.
 - **No typed openQA response models** — responses are `serde_json::Value`
   (or your own type via [`Client::request_as`]), classified generically via
   [`ApiResponse`].
