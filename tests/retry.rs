@@ -178,7 +178,8 @@ async fn deadline_aborts_the_loop_early() {
         .initial_backoff(Duration::from_millis(100))
         .multiplier(1.0)
         .max_backoff(Duration::from_millis(100))
-        .deadline(Some(Duration::from_millis(150)));
+        .deadline(Some(Duration::from_millis(500)))
+        .rng(MaxJitter);
 
     let client = ClientBuilder::new()
         .server(mock_server.uri())
@@ -249,11 +250,11 @@ async fn x_api_hash_differs_between_retry_attempts() {
 #[tokio::test]
 async fn deadline_aborts_transport_error_retries_and_surfaces_last_error() {
     // Nothing listens here; connections fail immediately, and a fixed
-    // (non-jittered) 200ms backoff can never fit inside a 50ms deadline.
+    // (non-jittered) 1s backoff can never fit inside a 300ms deadline.
     let retry = RetryPolicy::default()
         .max_retries(10)
-        .initial_backoff(Duration::from_millis(200))
-        .deadline(Some(Duration::from_millis(50)))
+        .initial_backoff(Duration::from_secs(1))
+        .deadline(Some(Duration::from_millis(300)))
         .rng(MaxJitter);
 
     let client = ClientBuilder::new()
@@ -272,7 +273,127 @@ async fn deadline_aborts_transport_error_retries_and_surfaces_last_error() {
 
     assert!(matches!(err, Error::Connection { .. }));
     assert!(
-        elapsed < Duration::from_millis(150),
-        "the deadline should abort before the 200ms backoff sleep: took {elapsed:?}"
+        elapsed < Duration::from_millis(900),
+        "the deadline should abort before the 1s backoff sleep: took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn deadline_cuts_off_an_in_flight_request() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+        .mount(&mock_server)
+        .await;
+
+    let retry = RetryPolicy::default()
+        .max_retries(0)
+        .deadline(Some(Duration::from_millis(300)));
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(retry)
+        .build()
+        .unwrap();
+
+    let start = Instant::now();
+    let err = client
+        .request(Method::GET, "/jobs", None)
+        .await
+        .expect_err("a request slower than the deadline must be aborted");
+    let elapsed = start.elapsed();
+
+    assert!(matches!(err, Error::DeadlineExceeded { .. }));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "the deadline should abort well before the 3s response delay: took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn deadline_spans_redirect_hops() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/a"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", "/b")
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/b"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", "/c")
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/c"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&mock_server)
+        .await;
+
+    let retry = RetryPolicy::default()
+        .max_retries(0)
+        .deadline(Some(Duration::from_millis(500)));
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(retry)
+        .build()
+        .unwrap();
+
+    let start = Instant::now();
+    let err = client
+        .request(Method::GET, "/a", None)
+        .await
+        .expect_err("the deadline must span every redirect hop, not restart per hop");
+    let elapsed = start.elapsed();
+
+    assert!(matches!(err, Error::DeadlineExceeded { .. }));
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "today each hop restarts the clock and this would succeed at ~900ms: took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn honor_retry_after_false_ignores_the_header() {
+    let mock_server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_in_mock = attempts.clone();
+
+    Mock::given(method("GET"))
+        .respond_with(move |_req: &Request| {
+            if attempts_in_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503).insert_header("Retry-After", "5")
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))
+            }
+        })
+        .mount(&mock_server)
+        .await;
+
+    let client = ClientBuilder::new()
+        .server(mock_server.uri())
+        .retry(fast_retry(3).honor_retry_after(false))
+        .build()
+        .unwrap();
+
+    let start = Instant::now();
+    client
+        .request(Method::GET, "/jobs", None)
+        .await
+        .expect("should succeed after the computed backoff, ignoring Retry-After");
+    let elapsed = start.elapsed();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "Retry-After: 5 must be ignored: took {elapsed:?}"
     );
 }

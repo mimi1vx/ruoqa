@@ -194,7 +194,11 @@ responsibility on an injected client, so calling either alongside
 
 Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 [`RetryPolicy::upstream_compat`] for a more lenient profile (5 retries,
-10 s initial backoff, 60 s cap, no deadline).
+10 s initial backoff, 60 s cap, no deadline). `deadline` is a budget for the
+whole [`Client::execute`] call — every attempt, every backoff, and every
+redirect hop — and a request still in flight when it expires is aborted with
+[`Error::DeadlineExceeded`]; the response body is then read under
+[`Timeouts`], not the deadline.
 
 ## Behaviour
 
@@ -222,6 +226,8 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
   [`ClientBuilder::max_response_bytes`]) unless read via
   [`Client::send_raw`].
 - URLs are userinfo-redacted wherever they appear in errors or logs.
+- [`Error::DeadlineExceeded`] does not mean the server did not act on the
+  request — an aborted in-flight write may already have been committed.
 
 ## Versioning
 
@@ -242,6 +248,8 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 [`Client::request_as`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_as
 [`Client::request_form`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_form
 [`Client::request_typed`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_typed
+[`Client::execute`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.execute
+[`Error::DeadlineExceeded`]: https://docs.rs/ruoqa/latest/ruoqa/error/enum.Error.html#variant.DeadlineExceeded
 [`ApiResponse`]: https://docs.rs/ruoqa/latest/ruoqa/client/enum.ApiResponse.html
 [`TlsMode`]: https://docs.rs/ruoqa/latest/ruoqa/tls/enum.TlsMode.html
 [`Timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.Timeouts.html
