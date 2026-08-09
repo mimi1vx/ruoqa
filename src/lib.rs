@@ -13,7 +13,7 @@ pub mod policy;
 pub mod secret;
 pub mod tls;
 
-pub use client::{Client, ClientBuilder, PreparedRequest};
+pub use client::{ApiResponse, Client, ClientBuilder, PreparedRequest};
 pub use error::{Error, Result};
 pub use policy::{RetryPolicy, Timeouts};
 pub use secret::{ApiKey, ApiSecret};

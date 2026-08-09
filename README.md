@@ -26,13 +26,19 @@ println!("{jobs}");
 # }
 ```
 
-Responses are parsed automatically: a `text/yaml` body is decoded with a
-budget-limited YAML parser (rejecting alias bombs rather than exhausting
-memory), a `204 No Content` becomes `Value::Null`, and everything else is
-decoded as JSON. Non-2xx responses become `Error::Request`; use
-[`Client::send_raw`] to bypass parsing and the response-size cap (e.g. for
-asset downloads), and [`Client::request_as`] to deserialize into your own
-type instead of a generic `serde_json::Value`.
+Responses are classified by content type, not assumed to be JSON: a JSON media
+type (`application/json`, or an `application/…+json` suffix) is decoded as
+JSON, a YAML media type (`text/yaml`, `application/yaml`, `application/x-yaml`,
+`text/x-yaml`) is decoded with a budget-limited YAML parser (rejecting alias
+bombs rather than exhausting memory), a `204 No Content` or any other 2xx with
+an empty body becomes `Value::Null`, and everything else — including openQA's
+`ok`/`ack`/`OK` text routes such as `GET /api/v1/auth` and the mutex/barrier
+lock routes, served as `text/html` — arrives as a JSON string instead of an
+error. Non-2xx responses become `Error::Request`; use [`Client::send_raw`] to
+bypass parsing and the response-size cap (e.g. for asset downloads),
+[`Client::request_as`] to deserialize into your own type instead of a generic
+`serde_json::Value`, and [`Client::request_typed`] to get an [`ApiResponse`]
+back when a JSON string and a text body must be told apart.
 
 openQA's `isos` endpoint, the main way to schedule jobs, expects
 `application/x-www-form-urlencoded` rather than JSON — use
@@ -194,7 +200,8 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 
 - **Async only.** No synchronous/blocking facade; bring your own
   `tokio::runtime::Handle::block_on` if you need one.
-- **`Accept: application/json`** on every request.
+- **`Accept: application/json`** on every request — openQA's text routes
+  (`ok`/`ack`/`OK`) ignore it and answer `text/html` regardless.
 - **Restricted, same-origin redirects** (default cap of 3 hops, configurable
   via [`ClientBuilder::max_redirects`]); a cross-origin redirect is an error
   rather than silently dropping `X-API-Key`/`X-API-Hash` or (worse)
@@ -204,7 +211,8 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 - **No sub-path** (`base_url` with a path component) deployments — a
   deliberate non-goal.
 - **No typed openQA response models** — responses are `serde_json::Value`
-  (or your own type via [`Client::request_as`]).
+  (or your own type via [`Client::request_as`]), classified generically via
+  [`ApiResponse`].
 - **No CLI binary.**
 - Response bodies are capped (32 MiB by default, configurable via
   [`ClientBuilder::max_response_bytes`]) unless read via
@@ -229,6 +237,8 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 [`Client::send_raw`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.send_raw
 [`Client::request_as`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_as
 [`Client::request_form`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_form
+[`Client::request_typed`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_typed
+[`ApiResponse`]: https://docs.rs/ruoqa/latest/ruoqa/client/enum.ApiResponse.html
 [`TlsMode`]: https://docs.rs/ruoqa/latest/ruoqa/tls/enum.TlsMode.html
 [`Timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.Timeouts.html
 [`RetryPolicy`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.RetryPolicy.html
