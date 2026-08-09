@@ -5,7 +5,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
@@ -444,16 +444,38 @@ impl Client {
         &self.inner.base_url
     }
 
-    /// Resolves `path` against the client's base URL.
+    /// Resolves `path` against the client's base URL. `path` must be a
+    /// relative reference resolving to the same origin as the base URL: an
+    /// absolute URL or network-path reference (`//host/...`) is rejected
+    /// even when it happens to resolve to that origin, so a caller cannot
+    /// accidentally rely on the origin check alone.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     fn join(&self, path: &str) -> Result<Url> {
-        self.inner
+        let url = self
+            .inner
             .base_url
             .join(path)
             .map_err(|source| Error::InvalidPath {
                 path: path.to_owned(),
                 source,
-            })
+            })?;
+
+        guard_request_url(&self.inner.base_url, &url)?;
+
+        let relative = RELATIVE_GUARD
+            .join(path)
+            .map_err(|source| Error::InvalidPath {
+                path: path.to_owned(),
+                source,
+            })?;
+        if relative.origin() != RELATIVE_GUARD.origin() {
+            return Err(Error::UnsupportedRequestUrl {
+                url,
+                reason: "request paths must be relative to the base URL",
+            });
+        }
+
+        Ok(url)
     }
 
     /// Resolves `path` against the client's base URL and, for `body`,
@@ -462,7 +484,11 @@ impl Client {
     /// # Errors
     ///
     /// Returns [`Error::InvalidPath`] if `path` cannot be joined onto the
-    /// base URL, or [`Error::Parse`] if `body` cannot be serialized.
+    /// base URL, [`Error::UnsupportedRequestUrl`] if `path` is not a
+    /// relative reference or the resolved URL carries userinfo,
+    /// [`Error::CrossOriginRequest`] if it resolves to a different origin
+    /// than the base URL, or [`Error::Parse`] if `body` cannot be
+    /// serialized.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub fn prepare(
         &self,
@@ -498,7 +524,10 @@ impl Client {
     /// # Errors
     ///
     /// Returns [`Error::InvalidPath`] if `path` cannot be joined onto the
-    /// base URL.
+    /// base URL, [`Error::UnsupportedRequestUrl`] if `path` is not a
+    /// relative reference or the resolved URL carries userinfo, or
+    /// [`Error::CrossOriginRequest`] if it resolves to a different origin
+    /// than the base URL.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub fn prepare_form(
         &self,
@@ -672,8 +701,10 @@ impl Client {
     /// # Errors
     ///
     /// [`Error::Connection`] on an unretried transport failure,
-    /// [`Error::CrossOriginRedirect`] on a cross-origin redirect, or
-    /// [`Error::TooManyRedirects`] past `max_redirects`.
+    /// [`Error::CrossOriginRequest`] or [`Error::UnsupportedRequestUrl`] if
+    /// `prepared.url` (a public field a caller can set directly) fails the
+    /// same-origin check, [`Error::CrossOriginRedirect`] on a cross-origin
+    /// redirect, or [`Error::TooManyRedirects`] past `max_redirects`.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn execute(
         &self,
@@ -683,6 +714,7 @@ impl Client {
         let mut current = prepared.clone();
         let mut redirects_followed = 0usize;
         loop {
+            guard_request_url(&self.inner.base_url, &current.url)?;
             let resp = self
                 .send_with_retries(&current, retry_non_idempotent)
                 .await?;
@@ -872,6 +904,36 @@ impl Client {
             )),
         }
     }
+}
+
+/// Resolving `path` against a base that can never be the configured server
+/// isolates what `path` itself contributes: any origin change came from the
+/// path supplying its own scheme or authority, not from the base.
+static RELATIVE_GUARD: LazyLock<Url> = LazyLock::new(|| {
+    Url::parse("https://ruoqa-guard.invalid/").expect("static URL literal parses")
+});
+
+/// Rejects `url` if it does not share `base`'s origin, or if it carries
+/// userinfo (which would inject HTTP basic-auth credentials into an openQA
+/// request). Origin equality is the complete same-origin invariant only
+/// because `base_url` never carries a path (`config::netloc` discards it);
+/// if sub-path deployments are ever supported, this must also check that
+/// `url`'s path is prefixed by `base`'s.
+#[allow(clippy::result_large_err)] // see `ClientBuilder::build`
+fn guard_request_url(base: &Url, url: &Url) -> Result<()> {
+    if base.origin() != url.origin() {
+        return Err(Error::CrossOriginRequest {
+            base: base.clone(),
+            url: url.clone(),
+        });
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::UnsupportedRequestUrl {
+            url: url.clone(),
+            reason: "request URL must not contain userinfo",
+        });
+    }
+    Ok(())
 }
 
 /// `Some(next)` if `resp` is a same-origin redirect to follow; `Ok(None)`
@@ -1067,6 +1129,72 @@ mod tests {
             .config_paths(vec![])
             .build()
             .unwrap()
+    }
+
+    fn origin_test_client() -> Client {
+        ClientBuilder::new()
+            .server("https://openqa.example.com")
+            .config_paths(vec![])
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn join_rejects_cross_origin_paths() {
+        let client = origin_test_client();
+        let cases = [
+            "https://attacker.example/api",
+            "http://openqa.example.com/api",
+            "https://openqa.example.com:8443/api",
+            "//attacker.example/api",
+            "\\\\attacker.example/api",
+            "/\\attacker.example/api",
+            " //attacker.example/api",
+            "/\u{9}/attacker.example/api",
+        ];
+        for path in cases {
+            let err = client
+                .join(path)
+                .expect_err(&format!("{path:?} should be rejected"));
+            assert!(
+                matches!(err, Error::CrossOriginRequest { .. }),
+                "{path:?}: expected CrossOriginRequest, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn join_rejects_unsupported_urls() {
+        let client = origin_test_client();
+        let cases = [
+            "https://openqa.example.com/api/v1/jobs",
+            "//user:pass@openqa.example.com/api",
+        ];
+        for path in cases {
+            let err = client
+                .join(path)
+                .expect_err(&format!("{path:?} should be rejected"));
+            assert!(
+                matches!(err, Error::UnsupportedRequestUrl { .. }),
+                "{path:?}: expected UnsupportedRequestUrl, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn join_accepts_relative_paths_unchanged() {
+        let client = origin_test_client();
+        let cases = [
+            "api/v1/jobs",
+            "/api/v1/jobs",
+            "/api/v1/jobs?scope=relevant&limit=1",
+            "/api/../api/v1/jobs",
+        ];
+        for path in cases {
+            client
+                .join(path)
+                .unwrap_or_else(|e| panic!("{path:?} should be accepted: {e}"));
+        }
     }
 
     #[test]
