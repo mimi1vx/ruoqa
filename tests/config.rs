@@ -8,8 +8,8 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use ruoqa::ClientBuilder;
 use ruoqa::config::resolve;
+use ruoqa::{ApiKey, ClientBuilder, Error};
 
 /// A throwaway directory, removed on drop. Avoids a `tempfile`
 /// dev-dependency for the handful of `client.conf` fixtures below.
@@ -196,4 +196,29 @@ fn builder_config_paths_reads_the_fixture() {
 fn builder_empty_config_paths_skips_discovery() {
     let client = ClientBuilder::new().config_paths(vec![]).build().unwrap();
     assert_eq!(client.base_url().as_str(), "http://localhost/");
+}
+
+/// A builder-supplied `api_key` with no `api_secret` is rejected even when
+/// `client.conf` has a complete pair: sources are never mixed.
+#[test]
+fn builder_key_only_does_not_fall_back_to_conf_secret() {
+    let dir = tempdir();
+    let path = write_conf(
+        &dir,
+        "[openqa.fixture.example]\nkey = CONF_KEY\nsecret = CONF_SECRET\n",
+    );
+    let err = ClientBuilder::new()
+        .server("openqa.fixture.example")
+        .api_key(ApiKey::new("BUILDER_KEY"))
+        .config_paths(vec![path])
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::IncompleteCredentials {
+            origin: "ClientBuilder",
+            present: "api_key",
+            missing: "api_secret",
+        }
+    ));
 }

@@ -9,7 +9,7 @@ use ini::Ini;
 use url::Url;
 
 use crate::error::{Error, Result};
-use crate::secret::{ApiKey, ApiSecret};
+use crate::secret::{ApiKey, ApiSecret, Credentials};
 
 /// Resolved server configuration: base URL and (optional) credentials.
 ///
@@ -50,10 +50,6 @@ fn paths_from_env(
     xdg: Option<&str>,
     home: Option<&str>,
 ) -> Vec<PathBuf> {
-    fn non_empty(s: Option<&str>) -> Option<&str> {
-        s.filter(|s| !s.is_empty())
-    }
-
     if let Some(dir) = non_empty(openqa_config) {
         return vec![Path::new(dir).join("client.conf")];
     }
@@ -68,6 +64,41 @@ fn paths_from_env(
         }
     }
     paths
+}
+
+/// Treats an empty string as unset, as the Python client's `os.environ.get`
+/// callers do here.
+fn non_empty(s: Option<&str>) -> Option<&str> {
+    s.filter(|s| !s.is_empty())
+}
+
+/// The credential environment variables `OpenQA::UserAgent` reads.
+const API_KEY_ENV: &str = "OPENQA_API_KEY";
+const API_SECRET_ENV: &str = "OPENQA_API_SECRET";
+
+/// Credentials from `$OPENQA_API_KEY`/`$OPENQA_API_SECRET`, as upstream's
+/// `OpenQA::UserAgent::new` reads them. Empty values count as unset.
+///
+/// # Errors
+///
+/// [`Error::IncompleteCredentials`] when exactly one of the two is set.
+#[allow(clippy::result_large_err)] // see `resolve`
+pub(crate) fn env_credentials() -> Result<Option<Credentials>> {
+    credentials_from_env(
+        std::env::var(API_KEY_ENV).ok().as_deref(),
+        std::env::var(API_SECRET_ENV).ok().as_deref(),
+    )
+}
+
+/// Pure helper behind [`env_credentials`]; empty strings are unset.
+#[allow(clippy::result_large_err)] // see `resolve`
+fn credentials_from_env(key: Option<&str>, secret: Option<&str>) -> Result<Option<Credentials>> {
+    Credentials::from_parts(
+        non_empty(key).map(ApiKey::new),
+        non_empty(secret).map(ApiSecret::new),
+        "the environment",
+        (API_KEY_ENV, API_SECRET_ENV),
+    )
 }
 
 /// Read and merge `client.conf` files in order (later file's keys win, per
@@ -326,5 +357,70 @@ mod tests {
     fn no_home_yields_single_etc_entry() {
         let paths = paths_from_env(None, None, None);
         assert_eq!(paths, vec![PathBuf::from("/etc/openqa/client.conf")]);
+    }
+
+    #[test]
+    fn credentials_from_env_both_set_pairs() {
+        let credentials = credentials_from_env(Some("KEY"), Some("SECRET"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(credentials.key.as_str(), "KEY");
+        assert_eq!(credentials.secret.as_str(), "SECRET");
+    }
+
+    #[test]
+    fn credentials_from_env_both_unset_is_none() {
+        assert!(credentials_from_env(None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn credentials_from_env_both_empty_is_none() {
+        assert!(credentials_from_env(Some(""), Some("")).unwrap().is_none());
+    }
+
+    #[test]
+    fn credentials_from_env_key_only_errors() {
+        let err = credentials_from_env(Some("topvalue123"), None).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains(API_KEY_ENV));
+        assert!(message.contains(API_SECRET_ENV));
+        assert!(!message.contains("topvalue123"));
+        assert!(matches!(
+            err,
+            Error::IncompleteCredentials {
+                present: API_KEY_ENV,
+                missing: API_SECRET_ENV,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn credentials_from_env_secret_only_errors() {
+        let err = credentials_from_env(None, Some("topvalue456")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains(API_SECRET_ENV));
+        assert!(!message.contains("topvalue456"));
+        assert!(matches!(
+            err,
+            Error::IncompleteCredentials {
+                present: API_SECRET_ENV,
+                missing: API_KEY_ENV,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn credentials_from_env_empty_key_with_secret_is_half_set() {
+        let err = credentials_from_env(Some(""), Some("SECRET")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompleteCredentials {
+                present: API_SECRET_ENV,
+                missing: API_KEY_ENV,
+                ..
+            }
+        ));
     }
 }

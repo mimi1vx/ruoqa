@@ -100,6 +100,17 @@ pub enum Error {
         /// The conflicting builder option (`"tls"` or `"timeouts"`).
         option: &'static str,
     },
+
+    /// A credential source supplied a key without a secret, or vice versa.
+    #[error("incomplete openQA credentials from {origin}: {present} is set but {missing} is not")]
+    IncompleteCredentials {
+        /// Where the partial pair came from, e.g. `"the environment"`.
+        origin: &'static str,
+        /// The name of the credential half that was supplied.
+        present: &'static str,
+        /// The name of the credential half that was missing.
+        missing: &'static str,
+    },
 }
 
 /// A specialized [`Result`](std::result::Result) using [`enum@Error`].

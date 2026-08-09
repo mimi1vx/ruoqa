@@ -87,8 +87,17 @@ The lookup tries the bare `server` section first, then the full base URL
 section; both `key` and `secret` must be present in a section for it to
 count. When present, requests are HMAC-SHA1 signed and the `X-API-Key`
 header is sent. Without credentials only unauthenticated `GET` requests are
-possible. Explicit `ClientBuilder::api_key`/`api_secret` calls override
-whatever `client.conf` provides.
+possible.
+
+Credentials are resolved in three tiers: explicit
+`ClientBuilder::api_key`/`api_secret` calls, then
+`$OPENQA_API_KEY`/`$OPENQA_API_SECRET`, then `client.conf`. The first tier
+that supplies a **complete** key+secret pair wins outright; sources are
+never mixed, and a half-set pair from any tier (e.g. only `api_key`, or only
+`$OPENQA_API_KEY`) is a [`ClientBuilder::build`] error. Empty environment
+values count as unset. This is a deliberate divergence from upstream's
+`OpenQA::UserAgent`, which resolves the key and the secret independently and
+so permits mismatched pairs.
 
 **Scheme defaulting:** the scheme defaults to `https`, except for loopback
 hosts (`localhost`, `127.0.0.1`, `::1`), which default to `http`. You can
