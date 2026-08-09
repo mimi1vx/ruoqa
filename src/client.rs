@@ -396,6 +396,47 @@ pub struct PreparedRequest {
     pub body: Option<Bytes>,
 }
 
+/// A successful response body, classified by content type rather than
+/// assumed to be JSON. openQA answers several routes (`/api/v1/auth`, the
+/// mutex/barrier lock routes, artefact and status uploads) with
+/// `render(text => …)`, which is `ok`/`ack`/`OK` under `Content-Type:
+/// text/html`, not JSON. [`Client::request`] and [`Client::request_form`]
+/// flatten this into a [`Value`] via [`ApiResponse::into_value`];
+/// [`Client::request_typed`] and [`Client::request_form_typed`] return it
+/// directly for callers who must distinguish a JSON string `"ok"` from a
+/// text body `ok`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ApiResponse {
+    /// A JSON body.
+    Json(Value),
+    /// A YAML body, decoded with the budget-limited parser.
+    Yaml(Value),
+    /// A non-JSON, non-YAML body, e.g. openQA's `ok`/`ack`/`OK` replies.
+    /// Decoded with [`String::from_utf8_lossy`], so a text route with a
+    /// stray non-UTF-8 byte still succeeds rather than erroring.
+    Text(String),
+    /// `204 No Content`, or any 2xx with an empty body (including `HEAD`).
+    Empty,
+}
+
+impl ApiResponse {
+    /// Flattens `self` into a generic [`Value`]: `Text(s)` becomes
+    /// `Value::String(s)` and `Empty` becomes `Value::Null`. Used by
+    /// [`Client::request`] and [`Client::request_form`] so a text body no
+    /// longer fails a call that otherwise succeeded — at the cost of making
+    /// it indistinguishable from a JSON string; use [`Client::request_typed`]
+    /// when that distinction matters.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        match self {
+            Self::Json(v) | Self::Yaml(v) => v,
+            Self::Text(s) => Value::String(s),
+            Self::Empty => Value::Null,
+        }
+    }
+}
+
 impl Client {
     /// The base URL this client was built with.
     #[must_use]
@@ -487,15 +528,16 @@ impl Client {
 
     /// Sends `method path` with an optional JSON `body` and parses the
     /// response as JSON or YAML (see [`Client::send_raw`] to bypass parsing
-    /// and the response-size cap).
+    /// and the response-size cap). A non-JSON, non-YAML body — e.g. openQA's
+    /// `ok`/`ack`/`OK` text routes — arrives as a JSON string instead of an
+    /// error; use [`Client::request_typed`] if you need to tell that apart
+    /// from an actual JSON string response.
     ///
     /// # Errors
     ///
     /// See [`Client::execute`] and the module docs for the full error list.
     pub async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
-        let prepared = self.prepare(method, path, body)?;
-        let mut resp = self.execute(&prepared, false).await?;
-        self.handle_response(&prepared, &mut resp).await
+        Ok(self.request_typed(method, path, body).await?.into_value())
     }
 
     /// Like [`Client::request`], sending `form` as an
@@ -518,6 +560,68 @@ impl Client {
         path: &str,
         form: &[(&str, &str)],
     ) -> Result<Value> {
+        Ok(self
+            .request_form_typed(method, path, form)
+            .await?
+            .into_value())
+    }
+
+    /// Like [`Client::request`], returning the classified [`ApiResponse`]
+    /// instead of flattening it into a [`Value`]. Needed to tell a genuine
+    /// JSON string response apart from a text response such as openQA's
+    /// `GET /api/v1/auth` (`ok`) or the mutex/barrier lock routes (`ack`):
+    ///
+    /// ```no_run
+    /// # use ruoqa::{ApiResponse, ClientBuilder};
+    /// # async fn run() -> ruoqa::Result<()> {
+    /// let client = ClientBuilder::new().server("openqa.opensuse.org").build()?;
+    /// match client
+    ///     .request_typed(reqwest::Method::GET, "/api/v1/auth", None)
+    ///     .await?
+    /// {
+    ///     ApiResponse::Text(body) => println!("text response: {body}"),
+    ///     other => println!("{other:?}"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::execute`] and the module docs for the full error list.
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
+    pub async fn request_typed(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<ApiResponse> {
+        let prepared = self.prepare(method, path, body)?;
+        let mut resp = self.execute(&prepared, false).await?;
+        self.handle_response(&prepared, &mut resp).await
+    }
+
+    /// Like [`Client::request_typed`], sending `form` as an
+    /// `application/x-www-form-urlencoded` body via [`Client::prepare_form`]
+    /// instead of a JSON one.
+    ///
+    /// Unlike [`Client::request_typed`], transport-error retries are never
+    /// attempted: openQA's form-encoded write endpoints (e.g.
+    /// `POST /api/v1/isos`) are not idempotent, and retrying a request whose
+    /// response was lost could schedule duplicate jobs. Use
+    /// [`Client::prepare_form`] with [`Client::execute`] directly if you want
+    /// that retried.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::request_typed`].
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
+    pub async fn request_form_typed(
+        &self,
+        method: Method,
+        path: &str,
+        form: &[(&str, &str)],
+    ) -> Result<ApiResponse> {
         let prepared = self.prepare_form(method, path, form)?;
         let mut resp = self.execute(&prepared, false).await?;
         self.handle_response(&prepared, &mut resp).await
@@ -714,15 +818,18 @@ impl Client {
         req
     }
 
-    /// Mirrors `_handle_response`'s branch order: non-2xx errors first
-    /// (with a truncated body for the error message), then `204`, then
-    /// content-type-driven JSON/YAML parsing.
+    /// Non-2xx errors first (with a truncated body for the error message),
+    /// then `204`, then a content-type-driven, total classification of the
+    /// body into [`ApiResponse`]. Deliberately diverges from the openQA
+    /// Python client's `_handle_response`, which ends in `resp.json()`
+    /// unconditionally: that fails on the server's own `ok`/`ack`/`OK` text
+    /// routes, which this does not.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     async fn handle_response(
         &self,
         prepared: &PreparedRequest,
         resp: &mut reqwest::Response,
-    ) -> Result<Value> {
+    ) -> Result<ApiResponse> {
         let status = resp.status();
 
         if !status.is_success() {
@@ -736,7 +843,7 @@ impl Client {
         }
 
         if status == StatusCode::NO_CONTENT {
-            return Ok(Value::Null);
+            return Ok(ApiResponse::Empty);
         }
 
         let content_type = resp
@@ -746,12 +853,23 @@ impl Client {
             .unwrap_or_default()
             .to_owned();
 
+        let kind = classify(&content_type);
         let bytes = read_capped(resp, self.inner.max_response_bytes).await?;
 
-        if content_type.starts_with("text/yaml") {
-            parse_yaml(&bytes)
-        } else {
-            serde_json::from_slice(&bytes).map_err(|e| Error::Parse(Box::new(e)))
+        // Not derived from `Content-Length`: a chunked 2xx has none, and an
+        // empty `HEAD` response must still classify as `Empty`.
+        if bytes.is_empty() {
+            return Ok(ApiResponse::Empty);
+        }
+
+        match kind {
+            BodyKind::Yaml => parse_yaml(&bytes).map(ApiResponse::Yaml),
+            BodyKind::Json => serde_json::from_slice(&bytes)
+                .map(ApiResponse::Json)
+                .map_err(|e| Error::Parse(Box::new(e))),
+            BodyKind::Text => Ok(ApiResponse::Text(
+                String::from_utf8_lossy(&bytes).into_owned(),
+            )),
         }
     }
 }
@@ -902,6 +1020,41 @@ fn parse_yaml(bytes: &[u8]) -> Result<Value> {
         .map_err(|e| Error::Parse(Box::new(e)))
 }
 
+/// How [`Client::handle_response`] parses a non-empty body, decided purely by
+/// `Content-Type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyKind {
+    Json,
+    Yaml,
+    Text,
+}
+
+/// Classifies a `Content-Type` header value into a [`BodyKind`], ignoring any
+/// `;`-separated parameters and comparing case-insensitively. An absent or
+/// unparseable header (passed in as `""`) maps to `Text`: Mojolicious always
+/// sets a content type, so a missing one means a non-openQA intermediary,
+/// and `Text` is the only classification that never fails to parse.
+fn classify(content_type: &str) -> BodyKind {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if media_type == "application/json"
+        || (media_type.starts_with("application/") && media_type.ends_with("+json"))
+    {
+        return BodyKind::Json;
+    }
+    if matches!(
+        media_type.as_str(),
+        "text/yaml" | "application/yaml" | "application/x-yaml" | "text/x-yaml"
+    ) {
+        return BodyKind::Yaml;
+    }
+    BodyKind::Text
+}
+
 #[cfg(test)]
 mod tests {
     use tracing_test::traced_test;
@@ -914,6 +1067,29 @@ mod tests {
             .config_paths(vec![])
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn classify_matches_the_media_type_table() {
+        let cases = [
+            ("application/json", BodyKind::Json),
+            ("application/json; charset=utf-8", BodyKind::Json),
+            ("Application/JSON", BodyKind::Json),
+            ("application/hal+json", BodyKind::Json),
+            ("text/yaml", BodyKind::Yaml),
+            ("Text/YAML; charset=utf-8", BodyKind::Yaml),
+            ("application/x-yaml", BodyKind::Yaml),
+            ("text/html;charset=UTF-8", BodyKind::Text),
+            ("text/plain", BodyKind::Text),
+            ("", BodyKind::Text),
+        ];
+        for (content_type, expected) in cases {
+            assert_eq!(
+                classify(content_type),
+                expected,
+                "content_type: {content_type:?}"
+            );
+        }
     }
 
     #[test]
