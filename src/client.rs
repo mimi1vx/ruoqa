@@ -704,7 +704,15 @@ impl Client {
     /// [`Error::CrossOriginRequest`] or [`Error::UnsupportedRequestUrl`] if
     /// `prepared.url` (a public field a caller can set directly) fails the
     /// same-origin check, [`Error::CrossOriginRedirect`] on a cross-origin
-    /// redirect, or [`Error::TooManyRedirects`] past `max_redirects`.
+    /// redirect, [`Error::TooManyRedirects`] past `max_redirects`, or
+    /// [`Error::DeadlineExceeded`] if [`RetryPolicy::deadline`] elapses
+    /// while a request is in flight, waiting for backoff, or following a
+    /// redirect.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: only if the retry-policy mutex is poisoned by an
+    /// earlier panic elsewhere in the client.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn execute(
         &self,
@@ -713,10 +721,20 @@ impl Client {
     ) -> Result<reqwest::Response> {
         let mut current = prepared.clone();
         let mut redirects_followed = 0usize;
+        let started = Instant::now();
+        // Snapshotted once so a mutating caller cannot extend the budget of
+        // a running `execute` call by re-locking the policy per hop.
+        let deadline = self
+            .inner
+            .retry
+            .lock()
+            .unwrap()
+            .deadline
+            .map(|d| started + d);
         loop {
             guard_request_url(&self.inner.base_url, &current.url)?;
             let resp = self
-                .send_with_retries(&current, retry_non_idempotent)
+                .send_with_retries(&current, retry_non_idempotent, started, deadline)
                 .await?;
             match redirect_target(&current, &resp)? {
                 Some(next) => {
@@ -740,18 +758,38 @@ impl Client {
         &self,
         prepared: &PreparedRequest,
         retry_non_idempotent: bool,
+        started: Instant,
+        deadline: Option<Instant>,
     ) -> Result<reqwest::Response> {
-        let loop_start = Instant::now();
-        let (max_retries, deadline) = {
-            let policy = self.inner.retry.lock().unwrap();
-            (policy.max_retries, policy.deadline)
-        };
+        let max_retries = self.inner.retry.lock().unwrap().max_retries;
 
         for attempt in 0..=max_retries {
             let start = Instant::now();
             let req = self.sign(prepared);
 
-            match self.inner.http.execute(req).await {
+            let outcome = match deadline {
+                None => self.inner.http.execute(req).await,
+                Some(at) => {
+                    let Some(remaining) = at
+                        .checked_duration_since(Instant::now())
+                        .filter(|r| !r.is_zero())
+                    else {
+                        return Err(Error::DeadlineExceeded {
+                            elapsed: started.elapsed(),
+                        });
+                    };
+                    match tokio::time::timeout(remaining, self.inner.http.execute(req)).await {
+                        Ok(outcome) => outcome,
+                        Err(_) => {
+                            return Err(Error::DeadlineExceeded {
+                                elapsed: started.elapsed(),
+                            });
+                        }
+                    }
+                }
+            };
+
+            match outcome {
                 Ok(resp) => {
                     let status = resp.status();
                     let retryable = self
@@ -772,8 +810,10 @@ impl Client {
                     let backoff = self.inner.retry.lock().unwrap().backoff_for(attempt);
                     let delay = retry_after.map_or(backoff, |ra| ra.max(backoff));
 
-                    if let Some(deadline) = deadline
-                        && loop_start.elapsed() + delay >= deadline
+                    if let Some(at) = deadline
+                        && at
+                            .checked_duration_since(Instant::now())
+                            .is_none_or(|remaining| delay >= remaining)
                     {
                         return Ok(resp);
                     }
@@ -804,8 +844,10 @@ impl Client {
                     }
 
                     let backoff = self.inner.retry.lock().unwrap().backoff_for(attempt);
-                    if let Some(deadline) = deadline
-                        && loop_start.elapsed() + backoff >= deadline
+                    if let Some(at) = deadline
+                        && at
+                            .checked_duration_since(Instant::now())
+                            .is_none_or(|remaining| backoff >= remaining)
                     {
                         return Err(Error::Connection {
                             url: prepared.url.clone(),

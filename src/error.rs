@@ -98,6 +98,10 @@ pub enum Error {
     },
 
     /// The overall retry deadline elapsed before the request succeeded.
+    /// `elapsed` is measured from the start of the `Client::execute` call,
+    /// not from the current redirect hop. This does **not** imply the
+    /// server did not process the request: an aborted in-flight write may
+    /// already have been committed.
     #[error("deadline exceeded after {elapsed:?}")]
     DeadlineExceeded {
         /// How long the retry loop ran before giving up.

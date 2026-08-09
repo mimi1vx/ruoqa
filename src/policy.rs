@@ -133,7 +133,11 @@ pub struct RetryPolicy {
     pub multiplier: f64,
     /// Upper bound on the (pre-jitter) backoff.
     pub max_backoff: Duration,
-    /// Whole-retry-loop deadline, on top of `max_retries`.
+    /// A budget for the whole `Client::execute` call: every attempt, every
+    /// backoff sleep, and every redirect hop, on top of `max_retries`. A
+    /// request still in flight when it expires is aborted with
+    /// [`crate::Error::DeadlineExceeded`]. Response-body streaming happens
+    /// after `execute` returns and is bounded by `Timeouts`, not by this.
     pub deadline: Option<Duration>,
     /// Whether to honor a `Retry-After` response header over computed backoff.
     pub honor_retry_after: bool,
@@ -216,7 +220,11 @@ impl RetryPolicy {
         self
     }
 
-    /// Sets the whole-retry-loop deadline.
+    /// Sets the whole-`Client::execute` deadline: every attempt, every
+    /// backoff sleep, and every redirect hop, on top of `max_retries`. A
+    /// request still in flight when it expires is aborted with
+    /// [`crate::Error::DeadlineExceeded`]. Response-body streaming happens
+    /// after `execute` returns and is bounded by `Timeouts`, not by this.
     #[must_use]
     pub fn deadline(mut self, deadline: Option<Duration>) -> Self {
         self.deadline = deadline;
@@ -270,11 +278,16 @@ impl RetryPolicy {
         self.rng.uniform(backoff)
     }
 
-    /// Parses a `Retry-After` header: integer seconds or an HTTP-date,
-    /// clamped to `>= 0` and to `max_retry_after`. Returns `None` if the
-    /// header is absent or unparsable.
+    /// Returns `None` if `honor_retry_after` is false, or if the header is
+    /// absent or unparsable. Otherwise parses a `Retry-After` header:
+    /// integer seconds or an HTTP-date, clamped to `>= 0` and to
+    /// `max_retry_after`.
     #[must_use]
     pub fn parse_retry_after(&self, headers: &HeaderMap) -> Option<Duration> {
+        if !self.honor_retry_after {
+            return None;
+        }
+
         let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
 
         let duration = match value.parse::<u64>() {
@@ -404,6 +417,14 @@ mod tests {
     fn retry_after_missing_header_is_none() {
         let p = RetryPolicy::default();
         let headers = HeaderMap::new();
+        assert_eq!(p.parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn retry_after_ignored_when_disabled() {
+        let p = RetryPolicy::default().honor_retry_after(false);
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, "5".parse().unwrap());
         assert_eq!(p.parse_retry_after(&headers), None);
     }
 }
