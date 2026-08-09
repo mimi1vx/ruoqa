@@ -189,7 +189,9 @@ Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 - **Restricted, same-origin redirects** (default cap of 3 hops, configurable
   via [`ClientBuilder::max_redirects`]); a cross-origin redirect is an error
   rather than silently dropping `X-API-Key`/`X-API-Hash` or (worse)
-  forwarding them off-origin.
+  forwarding them off-origin. Redirect method/body handling follows
+  Mojolicious (openQA's own client): `301`/`302`/`303` turn a `POST` into a
+  bodyless `GET`, and only `307`/`308` replay the original method and body.
 - **No sub-path** (`base_url` with a path component) deployments — a
   deliberate non-goal.
 - **No typed openQA response models** — responses are `serde_json::Value`

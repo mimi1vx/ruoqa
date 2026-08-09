@@ -727,10 +727,22 @@ impl Client {
 }
 
 /// `Some(next)` if `resp` is a same-origin redirect to follow; `Ok(None)`
-/// for a non-redirect (or a redirect without a usable `Location`, which is
-/// treated as final rather than guessed at). Never forwards
-/// `X-API-Key`/`X-API-Hash` off-origin: a cross-origin `Location` errors
-/// before any request to it is ever built.
+/// for a non-redirect, a redirect without a usable `Location`, or a
+/// `Location` that is not `http`/`https` or has no host (all treated as
+/// final rather than guessed at, matching `Mojo::UserAgent::Transactor`'s
+/// `redirect`). Never forwards `X-API-Key`/`X-API-Hash` off-origin: a
+/// cross-origin `Location` errors before any request to it is ever built.
+///
+/// Method/body/header handling follows `Mojo::UserAgent::Transactor::redirect`:
+/// `307`/`308` replay the method, body, and headers verbatim; every other
+/// redirected status drops the body and every `content-*` header, and
+/// downgrades the method to `GET` for a `303` or an original `POST` (other
+/// methods, e.g. `PUT`/`DELETE`, keep their method but lose the body). Two
+/// intentional deviations from Mojo: the draft `QUERY` method has no special
+/// case (`reqwest::Method` has no constant for it and openQA does not route
+/// it), and non-`content-*` headers are kept on a downgraded hop rather than
+/// stripped, because Mojo strips them to protect credentials on cross-origin
+/// hops, while `ruoqa` refuses cross-origin hops outright.
 #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 fn redirect_target(
     current: &PreparedRequest,
@@ -755,6 +767,10 @@ fn redirect_target(
         return Ok(None);
     };
 
+    if !matches!(next_url.scheme(), "http" | "https") || !next_url.has_host() {
+        return Ok(None);
+    }
+
     if current.url.origin() != next_url.origin() {
         return Err(Error::CrossOriginRedirect {
             from: current.url.clone(),
@@ -762,14 +778,22 @@ fn redirect_target(
         });
     }
 
-    let (method, body, headers) = if status == StatusCode::SEE_OTHER {
-        (Method::GET, None, HeaderMap::new())
-    } else {
+    let (method, body, headers) = if matches!(
+        status,
+        StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT
+    ) {
         (
             current.method.clone(),
             current.body.clone(),
             current.headers.clone(),
         )
+    } else {
+        let method = if status == StatusCode::SEE_OTHER || current.method == Method::POST {
+            Method::GET
+        } else {
+            current.method.clone()
+        };
+        (method, None, without_content_headers(&current.headers))
     };
 
     Ok(Some(PreparedRequest {
@@ -778,6 +802,17 @@ fn redirect_target(
         headers,
         body,
     }))
+}
+
+/// Mojo removes every `content-*` header on a redirect that drops the body.
+fn without_content_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut out = HeaderMap::new();
+    for (name, value) in headers {
+        if !name.as_str().starts_with("content-") {
+            out.append(name.clone(), value.clone());
+        }
+    }
+    out
 }
 
 /// Streams the response body via `Response::chunk()`, bailing with
@@ -1044,6 +1079,119 @@ mod tests {
             .config_paths(vec![])
             .build()
             .unwrap();
+    }
+
+    fn prepared(method: Method, body: Option<&'static str>, headers: HeaderMap) -> PreparedRequest {
+        PreparedRequest {
+            method,
+            url: Url::parse("https://openqa.example.com/old").unwrap(),
+            headers,
+            body: body.map(|b| Bytes::from_static(b.as_bytes())),
+        }
+    }
+
+    fn redirect_response(status: u16, location: &str) -> reqwest::Response {
+        http::Response::builder()
+            .status(status)
+            .header("location", location)
+            .body("")
+            .unwrap()
+            .into()
+    }
+
+    #[test]
+    fn redirect_decision_matrix() {
+        // (status, method in) -> (method out, body dropped?)
+        let cases: &[(u16, Method, Method, bool)] = &[
+            (301, Method::GET, Method::GET, true),
+            (301, Method::HEAD, Method::HEAD, true),
+            (301, Method::POST, Method::GET, true),
+            (301, Method::PUT, Method::PUT, true),
+            (301, Method::DELETE, Method::DELETE, true),
+            (302, Method::GET, Method::GET, true),
+            (302, Method::HEAD, Method::HEAD, true),
+            (302, Method::POST, Method::GET, true),
+            (302, Method::PUT, Method::PUT, true),
+            (302, Method::DELETE, Method::DELETE, true),
+            (303, Method::GET, Method::GET, true),
+            (303, Method::HEAD, Method::GET, true),
+            (303, Method::POST, Method::GET, true),
+            (303, Method::PUT, Method::GET, true),
+            (303, Method::DELETE, Method::GET, true),
+            (307, Method::GET, Method::GET, false),
+            (307, Method::HEAD, Method::HEAD, false),
+            (307, Method::POST, Method::POST, false),
+            (307, Method::PUT, Method::PUT, false),
+            (307, Method::DELETE, Method::DELETE, false),
+            (308, Method::GET, Method::GET, false),
+            (308, Method::HEAD, Method::HEAD, false),
+            (308, Method::POST, Method::POST, false),
+            (308, Method::PUT, Method::PUT, false),
+            (308, Method::DELETE, Method::DELETE, false),
+        ];
+
+        for (status, method_in, method_out, body_dropped) in cases.iter().cloned() {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            let current = prepared(method_in.clone(), Some("{}"), headers);
+            let resp = redirect_response(status, "/new");
+
+            let next = redirect_target(&current, &resp)
+                .unwrap_or_else(|e| panic!("{status} {method_in}: unexpected error {e}"))
+                .unwrap_or_else(|| panic!("{status} {method_in}: expected a redirect"));
+
+            assert_eq!(next.method, method_out, "{status} {method_in}: method");
+            assert_eq!(
+                next.body.is_none(),
+                body_dropped,
+                "{status} {method_in}: body"
+            );
+        }
+    }
+
+    #[test]
+    fn downgraded_hop_keeps_custom_header_but_drops_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            HeaderName::from_static("x-api-jobtoken"),
+            HeaderValue::from_static("tok"),
+        );
+        let current = prepared(Method::POST, Some("{}"), headers);
+        let resp = redirect_response(302, "/new");
+
+        let next = redirect_target(&current, &resp).unwrap().unwrap();
+        assert!(!next.headers.contains_key(CONTENT_TYPE));
+        assert_eq!(next.headers.get("x-api-jobtoken").unwrap(), "tok");
+    }
+
+    #[test]
+    fn temporary_redirect_keeps_content_type_and_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let current = prepared(Method::POST, Some("{}"), headers);
+        let resp = redirect_response(307, "/new");
+
+        let next = redirect_target(&current, &resp).unwrap().unwrap();
+        assert_eq!(next.headers.get(CONTENT_TYPE).unwrap(), "application/json");
+        assert_eq!(next.body.unwrap().as_ref(), b"{}".as_slice());
+    }
+
+    #[test]
+    fn non_http_location_is_treated_as_final() {
+        let current = prepared(Method::GET, None, HeaderMap::new());
+        let resp = redirect_response(302, "mailto:admin@example.com");
+        assert!(redirect_target(&current, &resp).unwrap().is_none());
+    }
+
+    #[test]
+    fn cross_origin_location_still_errors_after_scheme_check() {
+        let current = prepared(Method::GET, None, HeaderMap::new());
+        let resp = redirect_response(302, "https://attacker.example/x");
+        assert!(matches!(
+            redirect_target(&current, &resp),
+            Err(Error::CrossOriginRedirect { .. })
+        ));
     }
 
     #[test]
