@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::policy::{RetryPolicy, Timeouts};
-use crate::secret::{ApiKey, ApiSecret, RedactedUrl};
+use crate::secret::{ApiKey, ApiSecret, Credentials, RedactedUrl};
 use crate::tls::TlsMode;
 use crate::{auth, config};
 
@@ -113,14 +113,20 @@ impl ClientBuilder {
         self
     }
 
-    /// Overrides the API key from `client.conf`, if any.
+    /// Sets the API key, taking precedence over
+    /// `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` and `client.conf`. Must be
+    /// paired with [`ClientBuilder::api_secret`]: setting only one is a
+    /// [`ClientBuilder::build`] error.
     #[must_use]
     pub fn api_key(mut self, api_key: ApiKey) -> Self {
         self.api_key = Some(api_key);
         self
     }
 
-    /// Overrides the API secret from `client.conf`, if any.
+    /// Sets the API secret, taking precedence over
+    /// `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` and `client.conf`. Must be
+    /// paired with [`ClientBuilder::api_key`]: setting only one is a
+    /// [`ClientBuilder::build`] error.
     #[must_use]
     pub fn api_secret(mut self, api_secret: ApiSecret) -> Self {
         self.api_secret = Some(api_secret);
@@ -248,14 +254,24 @@ impl ClientBuilder {
 
         let config_paths = self.config_paths.unwrap_or_else(config::default_paths);
         let resolved = config::resolve(&config_paths, &self.server, &self.scheme)?;
-        let api_key = self.api_key.or(resolved.api_key);
-        let api_secret = self.api_secret.or(resolved.api_secret);
+        let credentials = resolve_credentials(
+            Credentials::from_parts(
+                self.api_key,
+                self.api_secret,
+                "ClientBuilder",
+                ("api_key", "api_secret"),
+            )?,
+            config::env_credentials()?,
+            Credentials::from_parts(
+                resolved.api_key,
+                resolved.api_secret,
+                "client.conf",
+                ("key", "secret"),
+            )?,
+        );
         let base_url = resolved.base_url;
 
-        if (api_key.is_some() || api_secret.is_some())
-            && base_url.scheme() == "http"
-            && !is_loopback_host(&base_url)
-        {
+        if credentials.is_some() && base_url.scheme() == "http" && !is_loopback_host(&base_url) {
             tracing::warn!(
                 url = %RedactedUrl(&base_url),
                 "sending openQA API credentials over plaintext http to a non-loopback host"
@@ -268,10 +284,11 @@ impl ClientBuilder {
             USER_AGENT,
             HeaderValue::from_str(&self.user_agent).map_err(|e| Error::Config(Box::new(e)))?,
         );
-        if let Some(key) = &api_key {
+        if let Some(credentials) = &credentials {
             base_headers.insert(
                 HeaderName::from_static(X_API_KEY),
-                HeaderValue::from_str(key.as_str()).map_err(|e| Error::Config(Box::new(e)))?,
+                HeaderValue::from_str(credentials.key.as_str())
+                    .map_err(|e| Error::Config(Box::new(e)))?,
             );
         }
 
@@ -294,8 +311,7 @@ impl ClientBuilder {
             inner: Arc::new(Inner {
                 http,
                 base_url,
-                api_key,
-                api_secret,
+                credentials,
                 max_response_bytes: self.max_response_bytes,
                 max_redirects: self.max_redirects,
                 retry: Mutex::new(self.retry),
@@ -303,6 +319,18 @@ impl ClientBuilder {
             }),
         })
     }
+}
+
+/// Explicit builder values, then `$OPENQA_API_KEY`/`$OPENQA_API_SECRET`, then
+/// `client.conf`: the first source with a complete pair wins outright.
+/// Sources are deliberately never mixed, unlike upstream's
+/// `OpenQA::UserAgent`, which resolves key and secret independently.
+fn resolve_credentials(
+    explicit: Option<Credentials>,
+    env: Option<Credentials>,
+    conf: Option<Credentials>,
+) -> Option<Credentials> {
+    explicit.or(env).or(conf)
 }
 
 /// `true` for `localhost` and loopback IPs; matches the loopback set used by
@@ -319,8 +347,7 @@ fn is_loopback_host(url: &Url) -> bool {
 struct Inner {
     http: reqwest::Client,
     base_url: Url,
-    api_key: Option<ApiKey>,
-    api_secret: Option<ApiSecret>,
+    credentials: Option<Credentials>,
     max_response_bytes: usize,
     max_redirects: usize,
     retry: Mutex<RetryPolicy>,
@@ -341,13 +368,12 @@ pub struct Client {
 impl fmt::Debug for Client {
     /// Deliberately does not delegate to the inner `reqwest::Client`'s
     /// `Debug` impl, which would print the `X-API-Key` default header in the
-    /// clear. `ApiKey`/`ApiSecret` redact themselves, and `base_url` is
-    /// redacted here via `RedactedUrl`.
+    /// clear. `Credentials` redacts itself, and `base_url` is redacted here
+    /// via `RedactedUrl`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
             .field("base_url", &RedactedUrl(&self.inner.base_url))
-            .field("api_key", &self.inner.api_key)
-            .field("api_secret", &self.inner.api_secret)
+            .field("credentials", &self.inner.credentials)
             .field("max_response_bytes", &self.inner.max_response_bytes)
             .field("max_redirects", &self.inner.max_redirects)
             .finish_non_exhaustive()
@@ -669,7 +695,11 @@ impl Client {
     /// timestamp and hash) right before sending.
     fn sign(&self, prepared: &PreparedRequest) -> reqwest::Request {
         let mut headers = prepared.headers.clone();
-        auth::apply(&mut headers, &prepared.url, self.inner.api_secret.as_ref());
+        auth::apply(
+            &mut headers,
+            &prepared.url,
+            self.inner.credentials.as_ref().map(|c| &c.secret),
+        );
         for (name, value) in &self.inner.base_headers {
             if !headers.contains_key(name) {
                 headers.insert(name.clone(), value.clone());
@@ -962,8 +992,9 @@ mod tests {
             .config_paths(vec![])
             .build()
             .unwrap();
-        assert_eq!(client.inner.api_key.as_ref().unwrap().as_str(), "KEY");
-        assert_eq!(client.inner.api_secret.as_ref().unwrap().as_str(), "SECRET");
+        let credentials = client.inner.credentials.as_ref().unwrap();
+        assert_eq!(credentials.key.as_str(), "KEY");
+        assert_eq!(credentials.secret.as_str(), "SECRET");
     }
 
     #[test]
@@ -989,8 +1020,7 @@ mod tests {
             inner: Arc::new(Inner {
                 http: reqwest::Client::new(),
                 base_url: Url::parse("https://alice:s3cret@openqa.example.com/").unwrap(),
-                api_key: None,
-                api_secret: None,
+                credentials: None,
                 max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
                 max_redirects: DEFAULT_MAX_REDIRECTS,
                 retry: Mutex::new(RetryPolicy::default()),
@@ -1191,6 +1221,87 @@ mod tests {
         assert!(matches!(
             redirect_target(&current, &resp),
             Err(Error::CrossOriginRedirect { .. })
+        ));
+    }
+
+    fn dummy_credentials(key: &'static str) -> Credentials {
+        Credentials::from_parts(
+            Some(ApiKey::new(key)),
+            Some(ApiSecret::new(key)),
+            "test",
+            ("key", "secret"),
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn resolve_credentials_precedence() {
+        let explicit = dummy_credentials("explicit");
+        let env = dummy_credentials("env");
+        let conf = dummy_credentials("conf");
+
+        assert_eq!(
+            resolve_credentials(Some(dummy_credentials("explicit")), Some(env), Some(conf))
+                .unwrap()
+                .key
+                .as_str(),
+            explicit.key.as_str()
+        );
+        assert_eq!(
+            resolve_credentials(
+                None,
+                Some(dummy_credentials("env")),
+                Some(dummy_credentials("conf"))
+            )
+            .unwrap()
+            .key
+            .as_str(),
+            "env"
+        );
+        assert_eq!(
+            resolve_credentials(None, None, Some(dummy_credentials("conf")))
+                .unwrap()
+                .key
+                .as_str(),
+            "conf"
+        );
+        assert!(resolve_credentials(None, None, None).is_none());
+    }
+
+    #[test]
+    fn builder_api_key_without_secret_is_incomplete_credentials() {
+        let err = ClientBuilder::new()
+            .server("localhost:9526")
+            .api_key(ApiKey::new("KEY"))
+            .config_paths(vec![])
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompleteCredentials {
+                origin: "ClientBuilder",
+                present: "api_key",
+                missing: "api_secret",
+            }
+        ));
+    }
+
+    #[test]
+    fn builder_api_secret_without_key_is_incomplete_credentials() {
+        let err = ClientBuilder::new()
+            .server("localhost:9526")
+            .api_secret(ApiSecret::new("SECRET"))
+            .config_paths(vec![])
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompleteCredentials {
+                origin: "ClientBuilder",
+                present: "api_secret",
+                missing: "api_key",
+            }
         ));
     }
 
