@@ -66,19 +66,30 @@ println!("{scheduled}");
 
 ## Configuration
 
-Credentials are read from INI-style `client.conf` files, searched in order:
+Credentials are read from INI-style `client.conf` files, searched in three
+tiers, in order:
 
-1. `/etc/openqa/client.conf`
-2. `$XDG_CONFIG_HOME/openqa/client.conf` (only when `$XDG_CONFIG_HOME` is set
-   and absolute), else `~/.config/openqa/client.conf`
+1. `$OPENQA_CONFIG` (only when set and non-empty)
+2. `$XDG_CONFIG_HOME/openqa` (only when `$XDG_CONFIG_HOME` is set and
+   absolute), else `~/.config/openqa`
+3. `/etc/openqa`, then `/usr/etc/openqa`
 
-If `$OPENQA_CONFIG` is set, it is a directory that **exclusively overrides**
-this search: only `$OPENQA_CONFIG/client.conf` is read, and `/etc` and the
-user config dir are not consulted.
+**The first tier that has any file wins outright** — a user `client.conf`
+now replaces `/etc/openqa/client.conf` instead of merging with it, and later
+tiers are not read at all. Within a tier, each directory contributes its
+`client.conf` (if present) followed by its `client.conf.d/*.conf` drop-ins,
+sorted by name, later files winning; a directory with only drop-ins does not
+stop the scan of the tier's remaining directories.
+
+Two deliberate divergences from upstream: `$XDG_CONFIG_HOME` is a ruoqa
+extension inside tier 2 (upstream hardcodes `~/.config/openqa`), and a
+`client.conf` that fails to parse is always [`Error::Config`] rather than
+being silently skipped.
 
 [`ClientBuilder::config_paths`] overrides this whole search with an explicit
-path list, e.g. to point at a fixture in tests; an empty list skips reading
-`client.conf` entirely.
+path list, e.g. to point at a fixture in tests; the list is read in plain
+order with no tiering, and an empty list skips reading `client.conf`
+entirely.
 
 Each section is keyed by the server host (or full base URL) and provides the
 API `key`/`secret`:
@@ -270,6 +281,7 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 [`Client::request_typed`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.request_typed
 [`Client::execute`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.Client.html#method.execute
 [`Error::DeadlineExceeded`]: https://docs.rs/ruoqa/latest/ruoqa/error/enum.Error.html#variant.DeadlineExceeded
+[`Error::Config`]: https://docs.rs/ruoqa/latest/ruoqa/error/enum.Error.html#variant.Config
 [`ApiResponse`]: https://docs.rs/ruoqa/latest/ruoqa/client/enum.ApiResponse.html
 [`TlsMode`]: https://docs.rs/ruoqa/latest/ruoqa/tls/enum.TlsMode.html
 [`Timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/policy/struct.Timeouts.html
