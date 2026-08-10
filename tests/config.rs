@@ -222,3 +222,85 @@ fn builder_key_only_does_not_fall_back_to_conf_secret() {
         }
     ));
 }
+
+/// A sub-path server URL keeps its path, gains a trailing slash so
+/// `Url::join` treats it as a directory, and a bare authority carrying a
+/// path resolves the same way.
+#[test]
+fn subpath_server_keeps_path_and_gains_trailing_slash() {
+    let no_paths: [PathBuf; 0] = [];
+    let config = resolve(&no_paths, "http://h/openqa", "").unwrap();
+    assert_eq!(config.base_url.as_str(), "http://h/openqa/");
+
+    let config = resolve(&no_paths, "http://h/openqa/", "").unwrap();
+    assert_eq!(config.base_url.as_str(), "http://h/openqa/");
+
+    let config = resolve(&no_paths, "h/openqa", "").unwrap();
+    assert_eq!(config.base_url.as_str(), "https://h/openqa/");
+}
+
+/// A path-less server is unaffected by the trailing-slash normalisation
+/// beyond what `Url::parse` already does.
+#[test]
+fn path_less_server_is_unchanged() {
+    let no_paths: [PathBuf; 0] = [];
+    let config = resolve(&no_paths, "http://h", "").unwrap();
+    assert_eq!(config.base_url.as_str(), "http://h/");
+}
+
+/// Section keys stay path-free: `[h]` matches a sub-path server, but a
+/// section named after the path (`[h/openqa]`) never does.
+#[test]
+fn subpath_credentials_are_keyed_by_host_not_path() {
+    let dir = tempdir();
+    let path = write_conf(&dir, "[h]\nkey = AAAAAAAA\nsecret = BBBBBBBB\n");
+    let config = resolve(&[path], "https://h/openqa", "").unwrap();
+    assert_eq!(config.api_key.unwrap().as_str(), "AAAAAAAA");
+    assert_eq!(config.api_secret.unwrap().as_str(), "BBBBBBBB");
+
+    let dir = tempdir();
+    let path = write_conf(&dir, "[h/openqa]\nkey = AAAAAAAA\nsecret = BBBBBBBB\n");
+    let config = resolve(&[path], "https://h/openqa", "").unwrap();
+    assert!(config.api_key.is_none());
+    assert!(config.api_secret.is_none());
+}
+
+/// §15: scheme inference is based on the parsed host, not a string match
+/// against the whole authority, so a port or an unbracketed IPv6 literal no
+/// longer defeats loopback detection.
+#[test]
+fn scheme_inference_handles_ports_and_ipv6() {
+    let no_paths: [PathBuf; 0] = [];
+    assert_eq!(
+        resolve(&no_paths, "localhost:9526", "")
+            .unwrap()
+            .base_url
+            .as_str(),
+        "http://localhost:9526/"
+    );
+    assert_eq!(
+        resolve(&no_paths, "127.0.0.1:9526", "")
+            .unwrap()
+            .base_url
+            .as_str(),
+        "http://127.0.0.1:9526/"
+    );
+    assert_eq!(
+        resolve(&no_paths, "::1", "").unwrap().base_url.as_str(),
+        "http://[::1]/"
+    );
+    assert_eq!(
+        resolve(&no_paths, "[::1]:9526", "")
+            .unwrap()
+            .base_url
+            .as_str(),
+        "http://[::1]:9526/"
+    );
+    assert_eq!(
+        resolve(&no_paths, "example.com:8080", "")
+            .unwrap()
+            .base_url
+            .as_str(),
+        "https://example.com:8080/"
+    );
+}
