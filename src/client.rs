@@ -3,6 +3,7 @@
 //! The async openQA API client: builder, retry loop, restricted redirects,
 //! and capped response parsing.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -272,7 +273,10 @@ impl ClientBuilder {
         );
         let base_url = resolved.base_url;
 
-        if credentials.is_some() && base_url.scheme() == "http" && !is_loopback_host(&base_url) {
+        if credentials.is_some()
+            && base_url.scheme() == "http"
+            && !config::is_loopback_host(&base_url)
+        {
             tracing::warn!(
                 url = %RedactedUrl(&base_url),
                 "sending openQA API credentials over plaintext http to a non-loopback host"
@@ -332,17 +336,6 @@ fn resolve_credentials(
     conf: Option<Credentials>,
 ) -> Option<Credentials> {
     explicit.or(env).or(conf)
-}
-
-/// `true` for `localhost` and loopback IPs; matches the loopback set used by
-/// [`config::resolve`]'s scheme defaulting.
-fn is_loopback_host(url: &Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(domain)) => domain == "localhost",
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    }
 }
 
 struct Inner {
@@ -445,17 +438,23 @@ impl Client {
         &self.inner.base_url
     }
 
-    /// Resolves `path` against the client's base URL. `path` must be a
-    /// relative reference resolving to the same origin as the base URL: an
-    /// absolute URL or network-path reference (`//host/...`) is rejected
-    /// even when it happens to resolve to that origin, so a caller cannot
-    /// accidentally rely on the origin check alone.
+    /// Resolves `path` against the client's base URL. A single leading `/`
+    /// means "relative to the base URL", not "origin root": `/api/v1/jobs`
+    /// and `api/v1/jobs` resolve identically, and — with a sub-path base
+    /// (`base_url` carrying a path, e.g. `https://h/openqa/`) — both land
+    /// inside the configured prefix rather than replacing it. `path` must
+    /// otherwise be a relative reference resolving to the same origin as
+    /// the base URL and staying within its path prefix: an absolute URL or
+    /// network-path reference (`//host/...`) is rejected even when it
+    /// happens to resolve to that origin or prefix, so a caller cannot
+    /// accidentally rely on the origin/prefix checks alone.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     fn join(&self, path: &str) -> Result<Url> {
+        let stripped = path.strip_prefix('/').unwrap_or(path);
         let url = self
             .inner
             .base_url
-            .join(path)
+            .join(stripped)
             .map_err(|source| Error::InvalidPath {
                 path: path.to_owned(),
                 source,
@@ -488,7 +487,8 @@ impl Client {
     /// base URL, [`Error::UnsupportedRequestUrl`] if `path` is not a
     /// relative reference or the resolved URL carries userinfo,
     /// [`Error::CrossOriginRequest`] if it resolves to a different origin
-    /// than the base URL, or [`Error::Parse`] if `body` cannot be
+    /// than the base URL, [`Error::OutsideBaseUrlPath`] if it escapes the
+    /// base URL's path prefix, or [`Error::Parse`] if `body` cannot be
     /// serialized.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub fn prepare(
@@ -526,9 +526,10 @@ impl Client {
     ///
     /// Returns [`Error::InvalidPath`] if `path` cannot be joined onto the
     /// base URL, [`Error::UnsupportedRequestUrl`] if `path` is not a
-    /// relative reference or the resolved URL carries userinfo, or
+    /// relative reference or the resolved URL carries userinfo,
     /// [`Error::CrossOriginRequest`] if it resolves to a different origin
-    /// than the base URL.
+    /// than the base URL, or [`Error::OutsideBaseUrlPath`] if it escapes
+    /// the base URL's path prefix.
     #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub fn prepare_form(
         &self,
@@ -714,10 +715,11 @@ impl Client {
     /// # Errors
     ///
     /// [`Error::Connection`] on an unretried transport failure,
-    /// [`Error::CrossOriginRequest`] or [`Error::UnsupportedRequestUrl`] if
-    /// `prepared.url` (a public field a caller can set directly) fails the
-    /// same-origin check, [`Error::CrossOriginRedirect`] on a cross-origin
-    /// redirect, [`Error::TooManyRedirects`] past `max_redirects`, or
+    /// [`Error::CrossOriginRequest`], [`Error::UnsupportedRequestUrl`], or
+    /// [`Error::OutsideBaseUrlPath`] if `prepared.url` (a public field a
+    /// caller can set directly) fails the same-origin or base-path check,
+    /// [`Error::CrossOriginRedirect`] on a cross-origin redirect,
+    /// [`Error::TooManyRedirects`] past `max_redirects`, or
     /// [`Error::DeadlineExceeded`] if [`RetryPolicy::deadline`] elapses
     /// while a request is in flight, waiting for backoff, or following a
     /// redirect.
@@ -999,12 +1001,11 @@ static RELATIVE_GUARD: LazyLock<Url> = LazyLock::new(|| {
     Url::parse("https://ruoqa-guard.invalid/").expect("static URL literal parses")
 });
 
-/// Rejects `url` if it does not share `base`'s origin, or if it carries
+/// Rejects `url` if it does not share `base`'s origin, if it carries
 /// userinfo (which would inject HTTP basic-auth credentials into an openQA
-/// request). Origin equality is the complete same-origin invariant only
-/// because `base_url` never carries a path (`config::netloc` discards it);
-/// if sub-path deployments are ever supported, this must also check that
-/// `url`'s path is prefixed by `base`'s.
+/// request), or if it escapes `base`'s path prefix — the check that makes a
+/// sub-path deployment (`base = https://h/openqa/`) safe to join untrusted
+/// paths onto.
 #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 fn guard_request_url(base: &Url, url: &Url) -> Result<()> {
     if base.origin() != url.origin() {
@@ -1017,6 +1018,18 @@ fn guard_request_url(base: &Url, url: &Url) -> Result<()> {
         return Err(Error::UnsupportedRequestUrl {
             url: url.clone(),
             reason: "request URL must not contain userinfo",
+        });
+    }
+    let base_path = base.path();
+    let prefix: Cow<'_, str> = if base_path.ends_with('/') {
+        Cow::Borrowed(base_path)
+    } else {
+        Cow::Owned(format!("{base_path}/"))
+    };
+    if !url.path().starts_with(prefix.as_ref()) {
+        return Err(Error::OutsideBaseUrlPath {
+            base: base.clone(),
+            url: url.clone(),
         });
     }
     Ok(())
@@ -1225,17 +1238,58 @@ mod tests {
             .unwrap()
     }
 
+    /// A sub-path deployment: `base_url` is `https://openqa.example.com/openqa/`.
+    fn subpath_test_client() -> Client {
+        ClientBuilder::new()
+            .server("https://openqa.example.com/openqa")
+            .config_paths(vec![])
+            .build()
+            .unwrap()
+    }
+
     #[test]
     fn join_rejects_cross_origin_paths() {
-        let client = origin_test_client();
+        // A path carrying its own scheme, or a network-path reference whose
+        // separators survive the single-leading-slash strip in `join`, keeps
+        // its own authority through `Url::join` and is caught by the origin
+        // check regardless of the base's path.
         let cases = [
             "https://attacker.example/api",
             "http://openqa.example.com/api",
             "https://openqa.example.com:8443/api",
-            "//attacker.example/api",
             "\\\\attacker.example/api",
-            "/\\attacker.example/api",
             " //attacker.example/api",
+        ];
+        for client in [origin_test_client(), subpath_test_client()] {
+            for path in cases {
+                let err = client
+                    .join(path)
+                    .expect_err(&format!("{path:?} should be rejected"));
+                assert!(
+                    matches!(err, Error::CrossOriginRequest { .. }),
+                    "{path:?}: expected CrossOriginRequest, got {err:?}"
+                );
+            }
+        }
+    }
+
+    /// `join` strips exactly one leading separator so a leading `/` means
+    /// "relative to the base URL". A leading `//`, `/\`, or `/<tab>/` is one
+    /// separator away from becoming an ordinary absolute-path reference on
+    /// the base's own origin once that strip happens — so the origin check
+    /// alone can no longer catch it for a root base. The
+    /// non-relative-reference check (`RELATIVE_GUARD`, evaluated on the
+    /// original, unstripped path) still rejects it, under
+    /// `UnsupportedRequestUrl` instead of `CrossOriginRequest`. (A sub-path
+    /// base rejects the same inputs too, but as `OutsideBaseUrlPath`: its
+    /// base-path prefix check runs first and the disguised path never falls
+    /// inside `/openqa/`.)
+    #[test]
+    fn join_rejects_disguised_network_path_references() {
+        let client = origin_test_client();
+        let cases = [
+            "//attacker.example/api",
+            "/\\attacker.example/api",
             "/\u{9}/attacker.example/api",
         ];
         for path in cases {
@@ -1243,9 +1297,15 @@ mod tests {
                 .join(path)
                 .expect_err(&format!("{path:?} should be rejected"));
             assert!(
-                matches!(err, Error::CrossOriginRequest { .. }),
-                "{path:?}: expected CrossOriginRequest, got {err:?}"
+                matches!(err, Error::UnsupportedRequestUrl { .. }),
+                "{path:?}: expected UnsupportedRequestUrl, got {err:?}"
             );
+        }
+        let subpath_client = subpath_test_client();
+        for path in cases {
+            subpath_client.join(path).expect_err(&format!(
+                "{path:?} should be rejected under a sub-path base too"
+            ));
         }
     }
 
@@ -1265,6 +1325,12 @@ mod tests {
                 "{path:?}: expected UnsupportedRequestUrl, got {err:?}"
             );
         }
+        let subpath_client = subpath_test_client();
+        for path in cases {
+            subpath_client.join(path).expect_err(&format!(
+                "{path:?} should be rejected under a sub-path base too"
+            ));
+        }
     }
 
     #[test]
@@ -1280,6 +1346,34 @@ mod tests {
             client
                 .join(path)
                 .unwrap_or_else(|e| panic!("{path:?} should be accepted: {e}"));
+        }
+    }
+
+    #[test]
+    fn join_subpath_base_resolves_leading_slash_and_relative_paths_identically() {
+        let client = subpath_test_client();
+        for path in ["/api/v1/jobs", "api/v1/jobs"] {
+            let url = client
+                .join(path)
+                .unwrap_or_else(|e| panic!("{path:?} should be accepted: {e}"));
+            assert_eq!(
+                url.as_str(),
+                "https://openqa.example.com/openqa/api/v1/jobs"
+            );
+        }
+    }
+
+    #[test]
+    fn join_subpath_base_rejects_paths_escaping_the_prefix() {
+        let client = subpath_test_client();
+        for path in ["../evil", "/../evil", "api/../../evil"] {
+            let err = client
+                .join(path)
+                .expect_err(&format!("{path:?} should escape the base URL path"));
+            assert!(
+                matches!(err, Error::OutsideBaseUrlPath { .. }),
+                "{path:?}: expected OutsideBaseUrlPath, got {err:?}"
+            );
         }
     }
 
@@ -1692,16 +1786,6 @@ mod tests {
                 present: "api_secret",
                 missing: "api_key",
             }
-        ));
-    }
-
-    #[test]
-    fn is_loopback_host_matches_localhost_and_loopback_ips() {
-        assert!(is_loopback_host(&Url::parse("http://localhost").unwrap()));
-        assert!(is_loopback_host(&Url::parse("http://127.0.0.1").unwrap()));
-        assert!(is_loopback_host(&Url::parse("http://[::1]").unwrap()));
-        assert!(!is_loopback_host(
-            &Url::parse("http://openqa.example.com").unwrap()
         ));
     }
 }

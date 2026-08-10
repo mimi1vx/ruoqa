@@ -106,8 +106,9 @@ values count as unset. This is a deliberate divergence from upstream's
 so permits mismatched pairs.
 
 **Scheme defaulting:** the scheme defaults to `https`, except for loopback
-hosts (`localhost`, `127.0.0.1`, `::1`), which default to `http`. You can
-also pass a fully-qualified server such as `http://openqa.internal`.
+hosts (`localhost`, `127.0.0.1`, `::1`, and any of these with a port, e.g.
+`localhost:9526`), which default to `http`. You can also pass a
+fully-qualified server such as `http://openqa.internal`.
 
 ## TLS
 
@@ -216,12 +217,21 @@ rule governs transport errors and statuses alike.
   forwarding them off-origin. Redirect method/body handling follows
   Mojolicious (openQA's own client): `301`/`302`/`303` turn a `POST` into a
   bodyless `GET`, and only `307`/`308` replay the original method and body.
-- **No sub-path** (`base_url` with a path component) deployments — a
-  deliberate non-goal.
-- **Request paths must be relative**, and every request URL — including one
-  in a caller-built [`PreparedRequest`] — is origin-checked against
-  `base_url` before signing, so untrusted input in a path can never send
-  credentials to another origin.
+- **Sub-path deployments** (`server` given as e.g. `openqa.example.com/openqa`)
+  are supported: `base_url` keeps the path and gains a trailing slash. A
+  leading `/` on a request path means "relative to the base URL", not
+  "origin root" — `/api/v1/jobs` and `api/v1/jobs` resolve identically, both
+  landing inside the configured prefix. `client.conf` sections stay keyed by
+  host (`[openqa.example.com]`), matching upstream; a section named after the
+  path is never matched. Note the upstream caveat: the openQA server signs
+  `global.base_url`'s path plus the request it receives, so a sub-path
+  deployment only authenticates correctly if `base_url` matches what the
+  reverse proxy actually strips.
+- **Request paths must be relative and stay within the base URL's path**,
+  and every request URL — including one in a caller-built
+  [`PreparedRequest`] — is checked against `base_url`'s origin and path
+  before signing, so untrusted input in a path can never send credentials to
+  another origin or escape a sub-path prefix.
 - **No typed openQA response models** — responses are `serde_json::Value`
   (or your own type via [`Client::request_as`]), classified generically via
   [`ApiResponse`].

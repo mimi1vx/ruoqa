@@ -3,6 +3,7 @@
 //! `client.conf` discovery and base URL derivation, matching
 //! `_OpenQAClientBase.__init__`'s config-parsing behaviour.
 
+use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
 
 use ini::Ini;
@@ -133,35 +134,48 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
         if scheme.is_empty() {
             parsed.scheme().clone_into(&mut scheme);
         }
-        server = netloc(&parsed);
+        // Carries the path forward (e.g. `/openqa`) instead of discarding
+        // it, so a sub-path deployment survives; ports and further parsing
+        // are left to the final `Url::parse` below.
+        server = format!("{}{}", netloc(&parsed), parsed.path());
+    } else if let Ok(ip) = server.parse::<Ipv6Addr>() {
+        // A bare IPv6 literal (`::1`) is not a valid authority on its own;
+        // bracket it so the final `Url::parse` accepts it.
+        server = format!("[{ip}]");
     }
 
     if scheme.is_empty() {
-        if matches!(server.as_str(), "localhost" | "127.0.0.1" | "::1") {
-            "http"
-        } else {
-            "https"
-        }
-        .clone_into(&mut scheme);
+        // Probe-parsed only to classify the host as loopback or not: the
+        // authoritative parse (ports, paths) remains the one below.
+        let loopback =
+            Url::parse(&format!("http://{server}")).is_ok_and(|url| is_loopback_host(&url));
+        if loopback { "http" } else { "https" }.clone_into(&mut scheme);
     }
 
     let mut base_url =
         Url::parse(&format!("{scheme}://{server}")).map_err(|e| Error::Config(Box::new(e)))?;
 
-    // `netloc()` above already drops userinfo for the `http…`-prefixed form;
-    // this covers the bare-authority form (e.g. `alice:s3cret@host`), which
-    // skips `netloc()` and reaches `Url::parse` untouched. Never echoes the
-    // credentials: userinfo never authenticated a ruoqa request (see
-    // plans/url-userinfo-redaction.md), so there's nothing sensitive to
-    // withhold, but no reason to print it either.
+    // Never echoes the credentials: userinfo never authenticated a ruoqa
+    // request (see plans/url-userinfo-redaction.md), so there's nothing
+    // sensitive to withhold, but no reason to print it either.
     if !base_url.username().is_empty() || base_url.password().is_some() {
         tracing::warn!("dropping userinfo from server URL: it does not authenticate requests");
         let _ = base_url.set_username("");
         let _ = base_url.set_password(None);
     }
 
-    let base_url_section = base_url.origin().ascii_serialization();
-    let (api_key, api_secret) = lookup_credentials(&merged, &server, &base_url_section);
+    // Makes `Url::join` treat a sub-path prefix as a directory rather than a
+    // file to replace; a no-op for the path-less default (`Url::parse`
+    // already yields `/`).
+    if !base_url.path().ends_with('/') {
+        let path = format!("{}/", base_url.path());
+        base_url.set_path(&path);
+    }
+
+    let authority = netloc(&base_url);
+    let origin = base_url.origin().ascii_serialization();
+    let bare_host = base_url.host_str().unwrap_or_default();
+    let (api_key, api_secret) = lookup_credentials(&merged, &authority, &origin, bare_host);
 
     Ok(Config {
         base_url,
@@ -170,15 +184,28 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
     })
 }
 
-/// `host[:port]`. Unlike Python's `urlparse().netloc`, which includes
+/// `host[:port]`, path-free — matching upstream's section-key convention
+/// (`OpenQA::Command::client`, `OpenQA::Worker::WebUIConnection`: bare host,
+/// no port, no path). Unlike Python's `urlparse().netloc`, which includes
 /// userinfo, this deliberately drops it — userinfo is dead weight here (see
-/// the strip in [`resolve`] for the other, bare-authority path it can arrive
-/// by), not a feature to restore.
+/// the strip in [`resolve`] for the bare-authority path it can arrive by),
+/// not a feature to restore.
 fn netloc(url: &Url) -> String {
     let host = url.host_str().unwrap_or_default();
     match url.port() {
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
+    }
+}
+
+/// `true` for `localhost` and loopback IPs; used by [`resolve`]'s scheme
+/// defaulting and by [`crate::client`]'s plaintext-credentials warning.
+pub(crate) fn is_loopback_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => domain == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
@@ -208,16 +235,21 @@ fn load_merged(paths: &[impl AsRef<Path>]) -> Result<Ini> {
     Ok(merged)
 }
 
-/// Credential lookup: `server`'s section first, then the `base_url` section.
-/// Both `key` and `secret` must be present in a section for it to count,
-/// matching upstream's all-or-nothing `except configparser.Error` fallback.
+/// Credential lookup: the `host[:port]` authority's section first, then the
+/// `base_url` origin's, then the bare host's (matching `openqa-cli`'s
+/// `api => $url->host` for parity with upstream, which only ever fires when
+/// the first two miss). Both `key` and `secret` must be present in a
+/// section for it to count, matching upstream's all-or-nothing
+/// `except configparser.Error` fallback.
 fn lookup_credentials(
     config: &Ini,
-    server: &str,
-    base_url_section: &str,
+    authority: &str,
+    origin: &str,
+    bare_host: &str,
 ) -> (Option<ApiKey>, Option<ApiSecret>) {
-    section_credentials(config, server)
-        .or_else(|| section_credentials(config, base_url_section))
+    section_credentials(config, authority)
+        .or_else(|| section_credentials(config, origin))
+        .or_else(|| section_credentials(config, bare_host))
         .map_or((None, None), |(key, secret)| {
             (Some(ApiKey::new(key)), Some(ApiSecret::new(secret)))
         })
@@ -279,6 +311,16 @@ mod tests {
         let no_paths: [PathBuf; 0] = [];
         resolve(&no_paths, "openqa.example.com", "").unwrap();
         assert!(!logs_contain("userinfo"));
+    }
+
+    #[test]
+    fn is_loopback_host_matches_localhost_and_loopback_ips() {
+        assert!(is_loopback_host(&Url::parse("http://localhost").unwrap()));
+        assert!(is_loopback_host(&Url::parse("http://127.0.0.1").unwrap()));
+        assert!(is_loopback_host(&Url::parse("http://[::1]").unwrap()));
+        assert!(!is_loopback_host(
+            &Url::parse("http://openqa.example.com").unwrap()
+        ));
     }
 
     #[test]

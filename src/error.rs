@@ -97,6 +97,21 @@ pub enum Error {
         reason: &'static str,
     },
 
+    /// A request URL escapes the base URL's path prefix, e.g. a sub-path
+    /// deployment (`base_url = https://h/openqa/`) and a request path of
+    /// `../evil`.
+    #[error(
+        "refusing to send {} outside the base URL path {}",
+        RedactedUrl(url),
+        RedactedUrl(base)
+    )]
+    OutsideBaseUrlPath {
+        /// The client's configured base URL.
+        base: url::Url,
+        /// The request URL that resolved outside `base`'s path.
+        url: url::Url,
+    },
+
     /// The overall retry deadline elapsed before the request succeeded.
     /// `elapsed` is measured from the start of the `Client::execute` call,
     /// not from the current redirect hop. This does **not** imply the
