@@ -129,7 +129,9 @@ pub struct RetryPolicy {
     pub max_retries: u32,
     /// Backoff before the first retry.
     pub initial_backoff: Duration,
-    /// Growth factor applied to the backoff on each subsequent retry.
+    /// Growth factor applied to the backoff on each subsequent retry. Must
+    /// be finite and `>= 1.0`; [`ClientBuilder::build`](crate::ClientBuilder::build)
+    /// rejects anything else.
     pub multiplier: f64,
     /// Upper bound on the (pre-jitter) backoff.
     pub max_backoff: Duration,
@@ -213,7 +215,9 @@ impl RetryPolicy {
         self
     }
 
-    /// Sets the backoff growth factor.
+    /// Sets the backoff growth factor. Must be finite and `>= 1.0`;
+    /// [`ClientBuilder::build`](crate::ClientBuilder::build) rejects
+    /// anything else.
     #[must_use]
     pub fn multiplier(mut self, multiplier: f64) -> Self {
         self.multiplier = multiplier;
@@ -289,11 +293,34 @@ impl RetryPolicy {
     /// and jittered uniformly over `[0, backoff]`.
     #[must_use]
     pub fn backoff_for(&mut self, attempt: u32) -> Duration {
-        let backoff = self
-            .initial_backoff
-            .mul_f64(self.multiplier.powi(attempt.try_into().unwrap_or(i32::MAX)))
+        let exp = i32::try_from(attempt).unwrap_or(i32::MAX);
+        let secs = self.initial_backoff.as_secs_f64() * self.multiplier.powi(exp);
+        // A growth curve that overflows f64 or Duration saturates at the cap it
+        // would have hit anyway; this is also the last line of defence for a
+        // hand-built policy that never went through `ClientBuilder::build`.
+        let backoff = Duration::try_from_secs_f64(secs)
+            .unwrap_or(self.max_backoff)
             .min(self.max_backoff);
         self.rng.uniform(backoff)
+    }
+
+    /// Validates fields that would otherwise let [`Self::backoff_for`] panic
+    /// or misbehave. Called from
+    /// [`ClientBuilder::build`](crate::ClientBuilder::build).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::InvalidRetryPolicy`] if `multiplier` is not
+    /// finite and `>= 1.0`.
+    #[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
+    pub(crate) fn validate(&self) -> crate::Result<()> {
+        if !self.multiplier.is_finite() || self.multiplier < 1.0 {
+            return Err(crate::Error::InvalidRetryPolicy {
+                field: "multiplier",
+                reason: "must be a finite number >= 1.0",
+            });
+        }
+        Ok(())
     }
 
     /// Returns `None` if `honor_retry_after` is false, or if the header is
@@ -392,6 +419,36 @@ mod tests {
         let mut b = RetryPolicy::default().rng(DefaultRng::from_seed(7));
         for attempt in 0..5 {
             assert_eq!(a.backoff_for(attempt), b.backoff_for(attempt));
+        }
+    }
+
+    #[test]
+    fn backoff_for_saturates_instead_of_panicking() {
+        let mut p = RetryPolicy::default().multiplier(1e300);
+        let backoff = p.backoff_for(1000);
+        assert!(backoff <= p.max_backoff);
+    }
+
+    #[test]
+    fn validate_accepts_sane_multipliers() {
+        assert!(RetryPolicy::default().multiplier(1.0).validate().is_ok());
+        assert!(RetryPolicy::default().multiplier(2.0).validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_bad_multipliers() {
+        for bad in [f64::NAN, f64::INFINITY, 0.5, -1.0] {
+            let err = RetryPolicy::default()
+                .multiplier(bad)
+                .validate()
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                crate::Error::InvalidRetryPolicy {
+                    field: "multiplier",
+                    ..
+                }
+            ));
         }
     }
 

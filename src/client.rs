@@ -240,11 +240,15 @@ impl ClientBuilder {
     /// Returns [`Error::Config`] if `client.conf` fails to parse, or the
     /// `User-Agent`/API key contain characters invalid in a header value;
     /// [`Error::Tls`] if the underlying HTTP client fails to build (usually
-    /// a bad custom CA bundle); or [`Error::IncompatibleHttpClient`] if
+    /// a bad custom CA bundle); [`Error::IncompatibleHttpClient`] if
     /// [`ClientBuilder::http_client`] is combined with
-    /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`].
+    /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`]; or
+    /// [`Error::InvalidRetryPolicy`] if the configured `RetryPolicy` has an
+    /// out-of-range `multiplier`.
     #[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
     pub fn build(self) -> Result<Client> {
+        self.retry.validate()?;
+
         if self.http_client.is_some() {
             if self.tls.is_some() {
                 return Err(Error::IncompatibleHttpClient { option: "tls" });
@@ -1133,7 +1137,7 @@ async fn read_capped(resp: &mut reqwest::Response, limit: usize) -> Result<Bytes
         url: resp.url().clone(),
         source,
     })? {
-        if buf.len() + chunk.len() > limit {
+        if chunk.len() > limit.saturating_sub(buf.len()) {
             return Err(Error::BodyTooLarge { limit });
         }
         buf.extend_from_slice(&chunk);
@@ -1479,6 +1483,33 @@ mod tests {
         let credentials = client.inner.credentials.as_ref().unwrap();
         assert_eq!(credentials.key.as_str(), "KEY");
         assert_eq!(credentials.secret.as_str(), "SECRET");
+    }
+
+    #[test]
+    fn build_rejects_invalid_retry_multiplier() {
+        let err = ClientBuilder::new()
+            .server("localhost:9526")
+            .retry(RetryPolicy::default().multiplier(f64::NAN))
+            .config_paths(vec![])
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidRetryPolicy {
+                field: "multiplier",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn build_accepts_multiplier_of_one() {
+        ClientBuilder::new()
+            .server("localhost:9526")
+            .retry(RetryPolicy::default().multiplier(1.0))
+            .config_paths(vec![])
+            .build()
+            .unwrap();
     }
 
     #[test]
