@@ -194,7 +194,8 @@ responsibility on an injected client, so calling either alongside
 | `idempotent_methods` | GET, HEAD, OPTIONS, PUT, DELETE (not POST) |
 | `retry_non_idempotent` | false |
 
-Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
+`multiplier` must be finite and `>= 1.0`; [`ClientBuilder::build`] rejects
+anything else. Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
 [`RetryPolicy::upstream_compat`] for a more lenient profile (5 retries,
 10 s initial backoff, 60 s cap, no deadline). `deadline` is a budget for the
 whole [`Client::execute`] call — every attempt, every backoff, and every
@@ -278,3 +279,4 @@ GPL-3.0-or-later. See [COPYING](https://github.com/mimi1vx/ruoqa/blob/main/COPYI
 [`ClientBuilder::http_client`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.http_client
 [`ClientBuilder::tls`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.tls
 [`ClientBuilder::timeouts`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.timeouts
+[`ClientBuilder::build`]: https://docs.rs/ruoqa/latest/ruoqa/client/struct.ClientBuilder.html#method.build

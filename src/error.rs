@@ -153,6 +153,15 @@ pub enum Error {
         /// The name of the credential half that was missing.
         missing: &'static str,
     },
+
+    /// A retry-policy value is outside its supported range.
+    #[error("invalid retry policy: `{field}` {reason}")]
+    InvalidRetryPolicy {
+        /// The offending `RetryPolicy` field.
+        field: &'static str,
+        /// Why it was rejected.
+        reason: &'static str,
+    },
 }
 
 /// A specialized [`Result`](std::result::Result) using [`enum@Error`].
