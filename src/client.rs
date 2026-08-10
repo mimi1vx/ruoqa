@@ -216,9 +216,12 @@ impl ClientBuilder {
 
     /// Overrides the `client.conf` search path used by [`ClientBuilder::build`].
     ///
-    /// Unset (the default) searches [`config::default_paths`]. An empty
-    /// `vec![]` reads no `client.conf` at all, rather than falling back to
-    /// the default search.
+    /// Unset (the default) searches [`config::default_paths`]'s tiered
+    /// lookup, which stops at the first tier with any file. An explicit
+    /// list here is a plain in-order merge instead — every existing path is
+    /// read, later ones winning — with no tiering; an empty `vec![]` reads
+    /// no `client.conf` at all, rather than falling back to the default
+    /// search.
     #[must_use]
     pub fn config_paths(mut self, config_paths: Vec<PathBuf>) -> Self {
         self.config_paths = Some(config_paths);
