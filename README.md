@@ -254,9 +254,9 @@ While `ruoqa` is at `0.1.x`, the **minor** version is the breaking bump:
 reference](https://doc.rust-lang.org/cargo/reference/semver.html) calls a
 major change (removing a public item, adding a variant to a non-`#[non_exhaustive]`
 enum, adding a non-defaulted trait item, …). Patch releases (`0.1.x`) are
-additive/fixes only. `Error`, `JobState`, and `JobResult` are marked
-`#[non_exhaustive]` so the server adding new states or job results doesn't
-force a breaking release.
+additive/fixes only. `Error`, `JobState`, `JobResult`, and `ModuleResult` are
+marked `#[non_exhaustive]` so the server adding new states or job results
+doesn't force a breaking release.
 
 ## License
 

@@ -41,8 +41,11 @@ Integration tests live in `tests/` and use `wiremock` (HTTP mocking) and
   GPL-incompatible license fails CI by design — don't add it to `exceptions`.
 - **README is the crate docs:** `src/lib.rs` uses `#![doc = include_str!("../README.md")]`.
   Doc-test snippets in README.md run under `cargo test`; keep them compiling.
-- `src/consts.rs` mirrors openQA's `const.py`; enums are `#[non_exhaustive]`
-  with `#[serde(other)] Unknown` so unknown server values never fail to deserialize.
+- `src/consts.rs` mirrors `OpenQA::Jobs::Constants` at a pinned revision;
+  enums are `#[non_exhaustive]` with `#[serde(other)] Unknown` so unknown
+  server values never fail to deserialize. Its group-matching tests are wire
+  compatibility pins like `tests/vectors.json`: a diff there means a
+  deliberate upstream re-sync, not a test to "fix".
 
 ## Layout
 
