@@ -250,6 +250,41 @@ rule governs transport errors and statuses alike.
   (or your own type via [`Client::request_as`]), classified generically via
   [`ApiResponse`].
 - **No CLI binary.**
+- **No worker protocol.** `ruoqa` is an external REST client. The
+  worker-side surface is deliberately out of scope: multipart artefact
+  upload (`POST /api/v1/jobs/:id/artefact` — the only file-upload route in
+  the API, and one that answers `404 No worker assigned` unless a worker is
+  currently running the job), its chunked-asset variant, the
+  `X-API-JobToken` routes (`whoami`, `mutex`, `barrier`, `mm`, which
+  `os-autoinst` test modules use to synchronise during a job run), and the
+  worker WebSocket (`/api/v1/ws/:workerid`).
+- **…but nothing is walled off.** [`PreparedRequest`]'s fields are public
+  and [`Client::execute`] takes one directly, so a caller holding a job
+  token — or hand-assembling a multipart body — can reach those routes
+  without a helper:
+
+  ```rust,no_run
+  use reqwest::Method;
+  use reqwest::header::{HeaderName, HeaderValue};
+  use ruoqa::ClientBuilder;
+
+  # async fn run() -> ruoqa::Result<()> {
+  let client = ClientBuilder::new().server("openqa.example.com").build()?;
+  let mut prepared =
+      client.prepare_form(Method::POST, "/api/v1/mutex/my_lock", &[("action", "lock")])?;
+  prepared.headers.insert(
+      HeaderName::from_static("x-api-jobtoken"),
+      HeaderValue::from_static("the-job-token"),
+  );
+  let resp = client.execute(&prepared, false).await?;
+  println!("{}", resp.status());
+  # Ok(())
+  # }
+  ```
+
+  The request is still origin- and prefix-checked in `execute`, and still
+  HMAC-signed — harmless on a job-token route, which ignores the extra
+  headers.
 - Response bodies are capped (32 MiB by default, configurable via
   [`ClientBuilder::max_response_bytes`]) unless read via
   [`Client::send_raw`].
