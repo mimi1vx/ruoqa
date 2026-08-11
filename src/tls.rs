@@ -21,21 +21,17 @@ pub enum TlsMode {
         /// If `true`, trust *only* `certs`, discarding the platform roots.
         replace_roots: bool,
     },
-    /// Disable certificate verification entirely. Dangerous: only reachable
-    /// via [`TlsMode::danger_accept_invalid_certs`], which cannot be
-    /// triggered by accident.
+    /// Disable certificate verification entirely. Dangerous: applying this
+    /// mode logs a `tracing::warn!`, however it was constructed.
     DangerAcceptInvalid,
 }
 
 impl TlsMode {
     /// Builds a [`TlsMode::DangerAcceptInvalid`]. Named loudly so it cannot
-    /// be enabled by accident; emits a `tracing::warn!` once at build time.
+    /// be enabled by accident; applying it warns via `tracing::warn!` when
+    /// the client is built.
     #[must_use]
     pub fn danger_accept_invalid_certs() -> Self {
-        tracing::warn!(
-            "TLS certificate verification is disabled: connections are not \
-             protected against man-in-the-middle attacks"
-        );
         Self::DangerAcceptInvalid
     }
 
@@ -52,13 +48,21 @@ impl TlsMode {
                 certs,
                 replace_roots: false,
             } => builder.tls_certs_merge(certs),
-            Self::DangerAcceptInvalid => builder.tls_danger_accept_invalid_certs(true),
+            Self::DangerAcceptInvalid => {
+                tracing::warn!(
+                    "TLS certificate verification is disabled: connections are not \
+                     protected against man-in-the-middle attacks"
+                );
+                builder.tls_danger_accept_invalid_certs(true)
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use tracing_test::traced_test;
+
     use super::*;
 
     #[test]
@@ -92,5 +96,31 @@ mod tests {
     #[test]
     fn danger_accept_invalid_builds() {
         let _ = TlsMode::danger_accept_invalid_certs().apply(ClientBuilder::new());
+    }
+
+    #[test]
+    #[traced_test]
+    fn applying_the_danger_variant_directly_warns() {
+        let _ = TlsMode::DangerAcceptInvalid.apply(ClientBuilder::new());
+        assert!(logs_contain("TLS certificate verification is disabled"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn constructing_the_danger_variant_does_not_warn() {
+        let _ = TlsMode::danger_accept_invalid_certs();
+        assert!(!logs_contain("TLS certificate verification is disabled"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn safe_modes_do_not_warn() {
+        let _ = TlsMode::PlatformVerifier.apply(ClientBuilder::new());
+        let _ = TlsMode::CustomCa {
+            certs: vec![],
+            replace_roots: false,
+        }
+        .apply(ClientBuilder::new());
+        assert!(!logs_contain("TLS certificate verification is disabled"));
     }
 }

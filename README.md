@@ -126,7 +126,7 @@ fully-qualified server such as `http://openqa.internal`.
 > TLS certificate verification and exposes the connection to
 > man-in-the-middle attacks. Use it only against trusted instances on
 > trusted networks; prefer `TlsMode::CustomCa` with the internal CA bundle
-> instead.
+> instead. Building a client with this mode logs a `tracing::warn!`.
 
 A warning is also logged via `tracing::warn!` if credentials would be sent
 over plaintext `http` to a non-loopback host.
