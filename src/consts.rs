@@ -50,15 +50,15 @@ impl JobState {
     }
 }
 
-/// All known job states.
+/// All known job states, in lifecycle order.
 pub const STATES: &[&str] = &[
     "scheduled",
+    "assigned",
     "setup",
     "running",
-    "cancelled",
-    "done",
     "uploading",
-    "assigned",
+    "done",
+    "cancelled",
 ];
 /// States a job passes through before it's finished.
 pub const PENDING_STATES: &[&str] = &["scheduled", "assigned", "setup", "running", "uploading"];
@@ -274,12 +274,12 @@ mod tests {
             STATES,
             [
                 "scheduled",
+                "assigned",
                 "setup",
                 "running",
-                "cancelled",
-                "done",
                 "uploading",
-                "assigned"
+                "done",
+                "cancelled"
             ]
         );
         assert_eq!(
