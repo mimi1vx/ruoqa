@@ -188,8 +188,18 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// A more lenient retry profile: 5 retries, 10 s initial backoff, 60 s
-    /// cap, no overall deadline.
+    /// The `openQA-python-client` defaults at revision
+    /// [`b808edb`](https://github.com/os-autoinst/openQA-python-client/blob/b808edb0e10b73d432d0950290759c63c220a313/src/openqa_client/client.py#L199-L250):
+    /// 5 retries, a 10 s initial backoff doubling to a 60 s cap, no overall
+    /// deadline. Three behaviours are `ruoqa` hardening, not that client's:
+    /// full jitter (it sleeps a deterministic duration), replay restricted
+    /// to `idempotent_methods` unless the server signals backpressure or
+    /// [`RetryPolicy::retry_non_idempotent`] is set (it replays `POST`
+    /// unconditionally), and a `Retry-After` header honored and capped by
+    /// `max_retry_after` (it ignores the header). Canonical `openqa-cli`
+    /// (`OpenQA::Command::retry_tx`) is a different profile — 0 retries by
+    /// default, a flat 3 s delay, only 502/503 or connection errors — so
+    /// this is not that.
     #[must_use]
     pub fn upstream_compat() -> Self {
         Self {
@@ -386,6 +396,8 @@ mod tests {
         assert!(p.idempotent_methods.contains(&Method::GET));
     }
 
+    // Pinned to the `openQA-python-client` defaults at revision `b808edb`;
+    // changing these values is a conscious re-derivation, not a drift fix.
     #[test]
     fn upstream_compat_values() {
         let p = RetryPolicy::upstream_compat();

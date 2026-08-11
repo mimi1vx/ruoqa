@@ -196,8 +196,10 @@ responsibility on an injected client, so calling either alongside
 
 `multiplier` must be finite and `>= 1.0`; [`ClientBuilder::build`] rejects
 anything else. Backoff is exponential with full jitter (`uniform(0, backoff)`). Call
-[`RetryPolicy::upstream_compat`] for a more lenient profile (5 retries,
-10 s initial backoff, 60 s cap, no deadline). `deadline` is a budget for the
+[`RetryPolicy::upstream_compat`] for the `openQA-python-client`'s numbers
+(5 retries, 10 s initial backoff, 60 s cap, no deadline); the jitter, method
+restriction, and `Retry-After` handling are `ruoqa`'s own hardening, not
+that client's. `deadline` is a budget for the
 whole [`Client::execute`] call — every attempt, every backoff, and every
 redirect hop — and a request still in flight when it expires is aborted with
 [`Error::DeadlineExceeded`]; the response body is then read under
