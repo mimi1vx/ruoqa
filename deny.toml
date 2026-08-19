@@ -3,11 +3,9 @@ allow = [
     "Apache-2.0",
     "MIT",
     "ISC",
-    "BSD-2-Clause",
     "BSD-3-Clause",
     "Unicode-3.0",
     "MIT-0",
-    "Zlib",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
 ]
@@ -15,3 +13,15 @@ allow = [
 # so a future dependency dragging in a GPL-incompatible term (an `OpenSSL` or
 # CDDL clause) fails CI rather than quietly shipping.
 exceptions = [{ allow = ["GPL-3.0-or-later"], crate = "ruoqa" }]
+
+[bans]
+# Duplicate majors below come from unrelated transitive subtrees (rust-ini's
+# ordered-multimap vs. reqwest/tower's indexmap, rcgen's `ring` vs. aws-lc-rs's
+# build-time `cc`, etc.) and aren't dedupable from ruoqa's own Cargo.toml.
+skip = [
+    { crate = "base64@0.22.1", reason = "hyper-util/pem/reqwest/wiremock vs. serde-saphyr's 0.23" },
+    { crate = "core-foundation@0.9.4", reason = "system-configuration (via hyper-util) vs. rustls-platform-verifier's 0.10" },
+    { crate = "getrandom@0.2.17", reason = "rust-ini's const-random and rcgen's ring vs. jobserver/cc's 0.4" },
+    { crate = "hashbrown@0.14.5", reason = "rust-ini's ordered-multimap vs. indexmap's 0.17" },
+    { crate = "syn@2.0.119", reason = "most proc-macro deps vs. tokio-macros/serde_derive's syn 3" },
+]
