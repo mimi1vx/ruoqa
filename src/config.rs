@@ -150,7 +150,6 @@ const API_SECRET_ENV: &str = "OPENQA_API_SECRET";
 /// # Errors
 ///
 /// [`Error::IncompleteCredentials`] when exactly one of the two is set.
-#[allow(clippy::result_large_err)] // see `resolve`
 pub(crate) fn env_credentials() -> Result<Option<Credentials>> {
     credentials_from_env(
         std::env::var(API_KEY_ENV).ok().as_deref(),
@@ -159,7 +158,6 @@ pub(crate) fn env_credentials() -> Result<Option<Credentials>> {
 }
 
 /// Pure helper behind [`env_credentials`]; empty strings are unset.
-#[allow(clippy::result_large_err)] // see `resolve`
 fn credentials_from_env(key: Option<&str>, secret: Option<&str>) -> Result<Option<Credentials>> {
     Credentials::from_parts(
         non_empty(key).map(ApiKey::new),
@@ -181,7 +179,6 @@ fn credentials_from_env(key: Option<&str>, secret: Option<&str>) -> Result<Optio
 ///
 /// Returns [`Error::Config`] if a `client.conf` fails to parse or the
 /// derived base URL is invalid.
-#[allow(clippy::result_large_err)] // `Error`'s size is a deliberate tradeoff; not this fn's to fix.
 pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result<Config> {
     let merged = load_merged(paths)?;
 
@@ -283,7 +280,6 @@ fn parse_option() -> ini::ParseOption {
     }
 }
 
-#[allow(clippy::result_large_err)] // see `resolve`
 fn load_merged(paths: &[impl AsRef<Path>]) -> Result<Ini> {
     let mut merged = Ini::new();
     for path in paths {

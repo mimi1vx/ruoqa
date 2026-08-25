@@ -18,7 +18,7 @@ pub enum Error {
         /// The HTTP method that was sent.
         method: reqwest::Method,
         /// The URL that returned the error.
-        url: url::Url,
+        url: Box<url::Url>,
         /// The response's HTTP status code.
         status: reqwest::StatusCode,
         /// A truncated preview of the response body.
@@ -29,7 +29,7 @@ pub enum Error {
     #[error("failed to connect to {}", RedactedUrl(url))]
     Connection {
         /// The URL the connection attempt targeted.
-        url: url::Url,
+        url: Box<url::Url>,
         /// The underlying transport error.
         #[source]
         source: reqwest::Error,
@@ -69,9 +69,9 @@ pub enum Error {
     )]
     CrossOriginRedirect {
         /// The URL that issued the redirect.
-        from: url::Url,
+        from: Box<url::Url>,
         /// The cross-origin `Location` it pointed to.
-        to: url::Url,
+        to: Box<url::Url>,
     },
 
     /// A request URL's origin does not match the client's base URL.
@@ -82,9 +82,9 @@ pub enum Error {
     )]
     CrossOriginRequest {
         /// The client's configured base URL.
-        base: url::Url,
+        base: Box<url::Url>,
         /// The request URL that resolved to a different origin.
-        url: url::Url,
+        url: Box<url::Url>,
     },
 
     /// A request URL is structurally rejected independent of its origin,
@@ -92,7 +92,7 @@ pub enum Error {
     #[error("unsupported request URL {}: {reason}", RedactedUrl(url))]
     UnsupportedRequestUrl {
         /// The rejected URL.
-        url: url::Url,
+        url: Box<url::Url>,
         /// Why it was rejected.
         reason: &'static str,
     },
@@ -107,9 +107,9 @@ pub enum Error {
     )]
     OutsideBaseUrlPath {
         /// The client's configured base URL.
-        base: url::Url,
+        base: Box<url::Url>,
         /// The request URL that resolved outside `base`'s path.
-        url: url::Url,
+        url: Box<url::Url>,
     },
 
     /// The overall retry deadline elapsed before the request succeeded.
@@ -176,5 +176,14 @@ mod tests {
     #[test]
     fn error_is_send_sync_static() {
         assert_send_sync_static::<Error>();
+    }
+
+    #[test]
+    fn error_stays_under_clippys_large_error_threshold() {
+        assert!(
+            size_of::<Error>() <= 128,
+            "Error grew to {} bytes, past clippy's large-error threshold",
+            size_of::<Error>()
+        );
     }
 }

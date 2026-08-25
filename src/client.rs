@@ -248,7 +248,6 @@ impl ClientBuilder {
     /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`]; or
     /// [`Error::InvalidRetryPolicy`] if the configured `RetryPolicy` has an
     /// out-of-range `multiplier`.
-    #[allow(clippy::result_large_err)] // `Error`'s size is a deliberate tradeoff; not this fn's to fix.
     pub fn build(self) -> Result<Client> {
         self.retry.validate()?;
 
@@ -455,7 +454,6 @@ impl Client {
     /// network-path reference (`//host/...`) is rejected even when it
     /// happens to resolve to that origin or prefix, so a caller cannot
     /// accidentally rely on the origin/prefix checks alone.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     fn join(&self, path: &str) -> Result<Url> {
         let stripped = path.strip_prefix('/').unwrap_or(path);
         let url = self
@@ -477,7 +475,7 @@ impl Client {
             })?;
         if relative.origin() != RELATIVE_GUARD.origin() {
             return Err(Error::UnsupportedRequestUrl {
-                url,
+                url: Box::new(url),
                 reason: "request paths must be relative to the base URL",
             });
         }
@@ -497,7 +495,6 @@ impl Client {
     /// than the base URL, [`Error::OutsideBaseUrlPath`] if it escapes the
     /// base URL's path prefix, or [`Error::Parse`] if `body` cannot be
     /// serialized.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub fn prepare(
         &self,
         method: Method,
@@ -537,7 +534,6 @@ impl Client {
     /// [`Error::CrossOriginRequest`] if it resolves to a different origin
     /// than the base URL, or [`Error::OutsideBaseUrlPath`] if it escapes
     /// the base URL's path prefix.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub fn prepare_form(
         &self,
         method: Method,
@@ -574,7 +570,6 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::execute`] and the module docs for the full error list.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
         Ok(self.request_typed(method, path, body).await?.into_value())
     }
@@ -595,7 +590,6 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::request`].
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request_form(
         &self,
         method: Method,
@@ -631,7 +625,6 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::execute`] and the module docs for the full error list.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request_typed(
         &self,
         method: Method,
@@ -660,7 +653,6 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::request_typed`].
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request_form_typed(
         &self,
         method: Method,
@@ -678,7 +670,6 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::request`].
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request_as<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -696,7 +687,6 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::execute`].
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn send_raw(
         &self,
         method: Method,
@@ -739,7 +729,6 @@ impl Client {
     ///
     /// Never in practice: only if the retry-policy mutex is poisoned by an
     /// earlier panic elsewhere in the client.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn execute(
         &self,
         prepared: &PreparedRequest,
@@ -819,7 +808,6 @@ impl Client {
     /// The retry loop proper (mirrors `aclient.py::do_request`): retries
     /// transport errors and retryable statuses with jittered, capped
     /// backoff, honoring `Retry-After` and the overall deadline.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     async fn send_with_retries(
         &self,
         prepared: &PreparedRequest,
@@ -896,7 +884,7 @@ impl Client {
                     let eligible = self.method_retryable(&prepared.method, retry_non_idempotent);
                     if !eligible || attempt >= max_retries {
                         return Err(Error::Connection {
-                            url: prepared.url.clone(),
+                            url: Box::new(prepared.url.clone()),
                             source,
                         });
                     }
@@ -908,7 +896,7 @@ impl Client {
                             .is_none_or(|remaining| backoff >= remaining)
                     {
                         return Err(Error::Connection {
-                            url: prepared.url.clone(),
+                            url: Box::new(prepared.url.clone()),
                             source,
                         });
                     }
@@ -956,7 +944,6 @@ impl Client {
     /// Python client's `_handle_response`, which ends in `resp.json()`
     /// unconditionally: that fails on the server's own `ok`/`ack`/`OK` text
     /// routes, which this does not.
-    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     async fn handle_response(
         &self,
         prepared: &PreparedRequest,
@@ -968,7 +955,7 @@ impl Client {
             let body = read_truncated(resp, ERROR_BODY_PREVIEW_BYTES).await;
             return Err(Error::Request {
                 method: prepared.method.clone(),
-                url: resp.url().clone(),
+                url: Box::new(resp.url().clone()),
                 status,
                 body: String::from_utf8_lossy(&body).into_owned(),
             });
@@ -1018,17 +1005,16 @@ static RELATIVE_GUARD: LazyLock<Url> = LazyLock::new(|| {
 /// request), or if it escapes `base`'s path prefix — the check that makes a
 /// sub-path deployment (`base = https://h/openqa/`) safe to join untrusted
 /// paths onto.
-#[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 fn guard_request_url(base: &Url, url: &Url) -> Result<()> {
     if base.origin() != url.origin() {
         return Err(Error::CrossOriginRequest {
-            base: base.clone(),
-            url: url.clone(),
+            base: Box::new(base.clone()),
+            url: Box::new(url.clone()),
         });
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::UnsupportedRequestUrl {
-            url: url.clone(),
+            url: Box::new(url.clone()),
             reason: "request URL must not contain userinfo",
         });
     }
@@ -1040,8 +1026,8 @@ fn guard_request_url(base: &Url, url: &Url) -> Result<()> {
     };
     if !url.path().starts_with(prefix.as_ref()) {
         return Err(Error::OutsideBaseUrlPath {
-            base: base.clone(),
-            url: url.clone(),
+            base: Box::new(base.clone()),
+            url: Box::new(url.clone()),
         });
     }
     Ok(())
@@ -1064,7 +1050,6 @@ fn guard_request_url(base: &Url, url: &Url) -> Result<()> {
 /// it), and non-`content-*` headers are kept on a downgraded hop rather than
 /// stripped, because Mojo strips them to protect credentials on cross-origin
 /// hops, while `ruoqa` refuses cross-origin hops outright.
-#[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 fn redirect_target(
     current: &PreparedRequest,
     resp: &reqwest::Response,
@@ -1094,8 +1079,8 @@ fn redirect_target(
 
     if current.url.origin() != next_url.origin() {
         return Err(Error::CrossOriginRedirect {
-            from: current.url.clone(),
-            to: next_url,
+            from: Box::new(current.url.clone()),
+            to: Box::new(next_url),
         });
     }
 
@@ -1139,11 +1124,10 @@ fn without_content_headers(headers: &HeaderMap) -> HeaderMap {
 /// Streams the response body via `Response::chunk()`, bailing with
 /// [`Error::BodyTooLarge`] as soon as `limit` would be exceeded (rather than
 /// buffering the whole thing first).
-#[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 async fn read_capped(resp: &mut reqwest::Response, limit: usize) -> Result<Bytes> {
     let mut buf = BytesMut::new();
     while let Some(chunk) = resp.chunk().await.map_err(|source| Error::Connection {
-        url: resp.url().clone(),
+        url: Box::new(resp.url().clone()),
         source,
     })? {
         if chunk.len() > limit.saturating_sub(buf.len()) {
@@ -1188,7 +1172,6 @@ fn yaml_options() -> serde_saphyr::Options {
     }
 }
 
-#[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 fn parse_yaml(bytes: &[u8]) -> Result<Value> {
     serde_saphyr::from_slice_with_options(bytes, yaml_options())
         .map_err(|e| Error::Parse(Box::new(e)))

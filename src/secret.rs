@@ -70,7 +70,6 @@ impl Credentials {
     /// Pairs `key` with `secret`, rejecting a half-supplied pair. `names` is
     /// `(key_name, secret_name)` as the caller's source spells them, used
     /// only for the error message.
-    #[allow(clippy::result_large_err)] // `Error`'s size is a deliberate tradeoff.
     pub(crate) fn from_parts(
         key: Option<ApiKey>,
         secret: Option<ApiSecret>,

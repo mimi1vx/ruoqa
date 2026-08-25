@@ -23,7 +23,7 @@ async fn connection_error() -> reqwest::Error {
 fn request_error_redacts_url() {
     let err = Error::Request {
         method: Method::GET,
-        url: Url::parse(CREDENTIALED).unwrap(),
+        url: Box::new(Url::parse(CREDENTIALED).unwrap()),
         status: StatusCode::NOT_FOUND,
         body: String::new(),
     };
@@ -36,7 +36,7 @@ fn request_error_redacts_url() {
 #[tokio::test]
 async fn connection_error_redacts_url() {
     let err = Error::Connection {
-        url: Url::parse(CREDENTIALED).unwrap(),
+        url: Box::new(Url::parse(CREDENTIALED).unwrap()),
         source: connection_error().await,
     };
     let message = err.to_string();
@@ -48,8 +48,8 @@ async fn connection_error_redacts_url() {
 #[test]
 fn cross_origin_redirect_redacts_both_urls() {
     let err = Error::CrossOriginRedirect {
-        from: Url::parse(CREDENTIALED).unwrap(),
-        to: Url::parse("https://bob:h4x@evil.example.com/q").unwrap(),
+        from: Box::new(Url::parse(CREDENTIALED).unwrap()),
+        to: Box::new(Url::parse("https://bob:h4x@evil.example.com/q").unwrap()),
     };
     let message = err.to_string();
     assert!(!message.contains("s3cret"));
