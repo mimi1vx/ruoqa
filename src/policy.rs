@@ -322,7 +322,7 @@ impl RetryPolicy {
     ///
     /// Returns [`crate::Error::InvalidRetryPolicy`] if `multiplier` is not
     /// finite and `>= 1.0`.
-    #[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
+    #[allow(clippy::result_large_err)] // `Error`'s size is a deliberate tradeoff; not this fn's to fix.
     pub(crate) fn validate(&self) -> crate::Result<()> {
         if !self.multiplier.is_finite() || self.multiplier < 1.0 {
             return Err(crate::Error::InvalidRetryPolicy {

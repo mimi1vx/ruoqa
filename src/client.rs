@@ -248,7 +248,7 @@ impl ClientBuilder {
     /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`]; or
     /// [`Error::InvalidRetryPolicy`] if the configured `RetryPolicy` has an
     /// out-of-range `multiplier`.
-    #[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
+    #[allow(clippy::result_large_err)] // `Error`'s size is a deliberate tradeoff; not this fn's to fix.
     pub fn build(self) -> Result<Client> {
         self.retry.validate()?;
 
@@ -574,6 +574,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::execute`] and the module docs for the full error list.
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value> {
         Ok(self.request_typed(method, path, body).await?.into_value())
     }
@@ -594,6 +595,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::request`].
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request_form(
         &self,
         method: Method,
@@ -676,6 +678,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::request`].
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn request_as<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -693,6 +696,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::execute`].
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     pub async fn send_raw(
         &self,
         method: Method,
@@ -815,6 +819,7 @@ impl Client {
     /// The retry loop proper (mirrors `aclient.py::do_request`): retries
     /// transport errors and retryable statuses with jittered, capped
     /// backoff, honoring `Retry-After` and the overall deadline.
+    #[allow(clippy::result_large_err)] // see `ClientBuilder::build`
     async fn send_with_retries(
         &self,
         prepared: &PreparedRequest,
@@ -1134,6 +1139,7 @@ fn without_content_headers(headers: &HeaderMap) -> HeaderMap {
 /// Streams the response body via `Response::chunk()`, bailing with
 /// [`Error::BodyTooLarge`] as soon as `limit` would be exceeded (rather than
 /// buffering the whole thing first).
+#[allow(clippy::result_large_err)] // see `ClientBuilder::build`
 async fn read_capped(resp: &mut reqwest::Response, limit: usize) -> Result<Bytes> {
     let mut buf = BytesMut::new();
     while let Some(chunk) = resp.chunk().await.map_err(|source| Error::Connection {

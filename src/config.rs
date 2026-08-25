@@ -181,7 +181,7 @@ fn credentials_from_env(key: Option<&str>, secret: Option<&str>) -> Result<Optio
 ///
 /// Returns [`Error::Config`] if a `client.conf` fails to parse or the
 /// derived base URL is invalid.
-#[allow(clippy::result_large_err)] // `Error`'s size is a phase-1 decision; not this fn's to fix.
+#[allow(clippy::result_large_err)] // `Error`'s size is a deliberate tradeoff; not this fn's to fix.
 pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result<Config> {
     let merged = load_merged(paths)?;
 
