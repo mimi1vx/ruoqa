@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: release-plz/action@v0.5.131
+      - uses: release-plz/action@v0.5.132
         id: release-plz
         with:
           command: release
@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: release-plz/action@v0.5.131
+      - uses: release-plz/action@v0.5.132
         with:
           command: release-pr
         env:
