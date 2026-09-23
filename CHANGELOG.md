@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/mimi1vx/ruoqa/compare/v0.3.1...v0.3.2) - 2026-09-23
+
+### Added
+
+- *(auth)* support openQA personal access tokens via Bearer auth
+
+### Fixed
+
+- *(auth)* sign the query in openQA's canonical form
+
+### Other
+
+- document timeouts for long-running openQA writes
+- correct upstream references
+- *(deps)* bump serde-saphyr in the cargo-minor-patch group
+- *(deps)* bump release-plz/action in the actions group
+
 ## [0.3.1](https://github.com/mimi1vx/ruoqa/compare/v0.3.0...v0.3.1) - 2026-09-15
 
 ### Other
