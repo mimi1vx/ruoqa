@@ -16,7 +16,9 @@ pub struct Timeouts {
     pub connect: Duration,
     /// Per-read inactivity timeout.
     pub read: Duration,
-    /// Whole-request timeout, including the body.
+    /// Whole-request timeout, including the body. openQA's own client uses
+    /// a 10-minute inactivity timeout and no overall cap; raise this (and
+    /// [`RetryPolicy::deadline`]) for large synchronous `isos` POSTs.
     pub total: Duration,
     /// How long an idle pooled connection is kept alive.
     pub pool_idle: Duration,
@@ -140,6 +142,9 @@ pub struct RetryPolicy {
     /// request still in flight when it expires is aborted with
     /// [`crate::Error::DeadlineExceeded`]. Response-body streaming happens
     /// after `execute` returns and is bounded by `Timeouts`, not by this.
+    /// openQA's own client uses a 10-minute inactivity timeout with no
+    /// overall cap; raise this (and [`Timeouts::total`]) for large
+    /// synchronous `isos` POSTs.
     pub deadline: Option<Duration>,
     /// Whether to honor a `Retry-After` response header over computed backoff.
     pub honor_retry_after: bool,

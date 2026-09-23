@@ -219,6 +219,39 @@ method in `idempotent_methods`, unless the server signalled backpressure
 (`429`/`503` with `Retry-After`) or `retry_non_idempotent` is set; the same
 rule governs transport errors and statuses alike.
 
+openQA's own client (`OpenQA::UserAgent`) waits up to 10 minutes of
+inactivity on a request and caps nothing overall — "scheduling a couple of
+hundred jobs takes quite some time". `ruoqa`'s defaults above time out much
+sooner (60 s total, 120 s deadline), which a large synchronous
+`POST /api/v1/isos` scheduling many jobs can exceed. Two ways to handle that:
+pass `async=1` in the form (preferred — the server returns the scheduled
+product id immediately and schedules the jobs in the background; poll
+`GET /api/v1/isos/<id>` for completion), or build a client with a larger
+`Timeouts::total`/`read` and a matching `RetryPolicy::deadline`:
+
+```rust,no_run
+use std::time::Duration;
+
+use ruoqa::{ClientBuilder, RetryPolicy, Timeouts};
+
+# async fn run() -> ruoqa::Result<()> {
+let client = ClientBuilder::new()
+    .server("openqa.opensuse.org")
+    .timeouts(
+        Timeouts::default()
+            .read(Duration::from_mins(10))
+            .total(Duration::from_mins(10)),
+    )
+    .retry(RetryPolicy::default().deadline(None))
+    .build()?;
+# let _ = client;
+# Ok(())
+# }
+```
+
+Either way, remember that a timeout on a write does not mean the server
+didn't commit it — see the [`Error::DeadlineExceeded`] bullet below.
+
 ## Behaviour
 
 - **Async only.** No synchronous/blocking facade; bring your own
