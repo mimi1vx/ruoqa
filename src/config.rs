@@ -225,7 +225,8 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
     // print it either.
     if !base_url.username().is_empty() || base_url.password().is_some() {
         tracing::warn!(
-            "dropping userinfo from server URL: ruoqa does not use it for authentication"
+            "dropping userinfo from server URL: ruoqa does not use it for authentication; \
+             use ClientBuilder::username for personal-access-token auth instead"
         );
         let _ = base_url.set_username("");
         let _ = base_url.set_password(None);
