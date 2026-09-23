@@ -121,6 +121,36 @@ hosts (`localhost`, `127.0.0.1`, `::1`, and any of these with a port, e.g.
 `localhost:9526`), which default to `http`. You can also pass a
 fully-qualified server such as `http://openqa.internal`.
 
+### Personal access tokens
+
+[`ClientBuilder::username`] switches a client from HMAC-SHA1 signing to
+openQA's personal-access-token auth: `Authorization: Bearer
+<username>:<key>:<secret>`, built from the same already-resolved API
+key/secret. No `client.conf` key exists for the username — upstream defines
+none — so it is always set explicitly:
+
+```rust,no_run
+use ruoqa::ClientBuilder;
+use ruoqa::secret::Username;
+
+# fn run() -> ruoqa::Result<()> {
+let client = ClientBuilder::new()
+    .server("openqa.opensuse.org")
+    .username(Username::new("alice"))
+    .build()?;
+# let _ = client;
+# Ok(())
+# }
+```
+
+HMAC stays the default; token auth is opt-in only. It requires HTTPS or a
+loopback host — [`ClientBuilder::build`] rejects plaintext `http` to any
+other host, matching the server's own `is_local_request || is_secure` check
+— and trades away HMAC's clock-sync and per-request signing for a bearer
+token that is a static, replayable secret if it leaks (e.g. through a
+TLS-terminating proxy's access log). No `X-API-*` header is sent in this
+mode.
+
 ## TLS
 
 [`TlsMode`] controls certificate verification:

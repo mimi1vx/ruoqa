@@ -154,6 +154,18 @@ pub enum Error {
         missing: &'static str,
     },
 
+    /// A `username`/key/secret combination cannot form valid Bearer
+    /// (personal-access-token) credentials: an empty part, a part
+    /// containing `:` (breaks openQA's `_token_auth` regex
+    /// `^([^:]+):([^:]+):([^:]+)$`), or plaintext `http` to a non-loopback
+    /// host (the server's `_token_auth` requires `is_local_request ||
+    /// req->is_secure`).
+    #[error("invalid personal-access-token credentials: {reason}")]
+    InvalidCredentials {
+        /// Why the combination was rejected.
+        reason: &'static str,
+    },
+
     /// A retry-policy value is outside its supported range.
     #[error("invalid retry policy: `{field}` {reason}")]
     InvalidRetryPolicy {

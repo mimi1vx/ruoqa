@@ -4,6 +4,7 @@
 
 use std::fmt;
 
+use reqwest::header::HeaderValue;
 use url::Url;
 use zeroize::ZeroizeOnDrop;
 
@@ -56,6 +57,26 @@ impl fmt::Debug for ApiSecret {
     }
 }
 
+/// The openQA username paired with an API key/secret to authenticate via a
+/// Bearer personal access token instead of HMAC signing. Not secret — it is
+/// the identity a token belongs to, not the token itself — so unlike
+/// [`ApiKey`]/[`ApiSecret`] its `Debug` is not redacted.
+#[derive(Debug, Clone)]
+pub struct Username(Box<str>);
+
+impl Username {
+    /// Wraps `username` as a [`Username`].
+    pub fn new(username: impl Into<Box<str>>) -> Self {
+        Self(username.into())
+    }
+
+    /// Returns the username as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A complete openQA credential pair. The key and the secret are always
 /// resolved together and from a single source: a key without a secret
 /// cannot sign, and a key from one source paired with a secret from
@@ -90,6 +111,29 @@ impl Credentials {
                 missing: names.0,
             }),
         }
+    }
+
+    /// Builds the `Authorization: Bearer <user>:<key>:<secret>` header value
+    /// openQA's `_token_auth` expects, marked sensitive so it never surfaces
+    /// through header-logging middleware. Built fresh at sign time rather
+    /// than cached on `Client`, so the secret's only header-shaped copy is
+    /// the one in flight.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: [`ClientBuilder::build`](crate::ClientBuilder::build)
+    /// already rejects a `username`/key/secret combination that would fail
+    /// to become a valid header value.
+    pub(crate) fn bearer_value(&self, user: &Username) -> HeaderValue {
+        let mut value = HeaderValue::from_str(&format!(
+            "Bearer {}:{}:{}",
+            user.as_str(),
+            self.key.as_str(),
+            self.secret.as_str(),
+        ))
+        .expect("ClientBuilder::build already validated this combination");
+        value.set_sensitive(true);
+        value
     }
 }
 
@@ -210,6 +254,21 @@ mod tests {
                 missing: "secret"
             }
         ));
+    }
+
+    #[test]
+    fn bearer_value_has_expected_format_and_is_sensitive() {
+        let credentials = Credentials::from_parts(
+            Some(ApiKey::new("KEY")),
+            Some(ApiSecret::new("SECRET")),
+            "test",
+            ("key", "secret"),
+        )
+        .unwrap()
+        .unwrap();
+        let value = credentials.bearer_value(&Username::new("alice"));
+        assert_eq!(value.to_str().unwrap(), "Bearer alice:KEY:SECRET");
+        assert!(value.is_sensitive());
     }
 
     #[test]

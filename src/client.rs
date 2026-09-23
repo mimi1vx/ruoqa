@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
 use reqwest::header::{
-    ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, LOCATION, USER_AGENT,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, LOCATION, USER_AGENT,
 };
 use reqwest::{Method, StatusCode, Url};
 use serde::de::DeserializeOwned;
@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::policy;
 use crate::policy::{RetryPolicy, Timeouts};
-use crate::secret::{ApiKey, ApiSecret, Credentials, RedactedUrl};
+use crate::secret::{ApiKey, ApiSecret, Credentials, RedactedUrl, Username};
 use crate::tls::TlsMode;
 use crate::{auth, config};
 
@@ -43,6 +43,7 @@ pub struct ClientBuilder {
     scheme: String,
     api_key: Option<ApiKey>,
     api_secret: Option<ApiSecret>,
+    username: Option<Username>,
     timeouts: Option<Timeouts>,
     retry: RetryPolicy,
     tls: Option<TlsMode>,
@@ -60,6 +61,7 @@ impl fmt::Debug for ClientBuilder {
             .field("scheme", &self.scheme)
             .field("api_key", &self.api_key)
             .field("api_secret", &self.api_secret)
+            .field("username", &self.username)
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("tls", &self.tls)
@@ -79,6 +81,7 @@ impl Default for ClientBuilder {
             scheme: String::new(),
             api_key: None,
             api_secret: None,
+            username: None,
             timeouts: None,
             retry: RetryPolicy::default(),
             tls: None,
@@ -132,6 +135,20 @@ impl ClientBuilder {
     #[must_use]
     pub fn api_secret(mut self, api_secret: ApiSecret) -> Self {
         self.api_secret = Some(api_secret);
+        self
+    }
+
+    /// Enables personal-access-token (Bearer) auth instead of HMAC signing:
+    /// [`ClientBuilder::build`] sends `Authorization: Bearer
+    /// <username>:<key>:<secret>` using the already-resolved API key/secret
+    /// and skips `X-API-Key`/`X-API-Microtime`/`X-API-Hash` entirely. Opt-in
+    /// only — HMAC stays the default — and requires HTTPS or a loopback
+    /// host: openQA's `_token_auth` needs `is_local_request || is_secure`
+    /// and, unlike an HMAC signature, a bearer token is a replayable static
+    /// secret if intercepted.
+    #[must_use]
+    pub fn username(mut self, username: Username) -> Self {
+        self.username = Some(username);
         self
     }
 
@@ -245,9 +262,13 @@ impl ClientBuilder {
     /// [`Error::Tls`] if the underlying HTTP client fails to build (usually
     /// a bad custom CA bundle); [`Error::IncompatibleHttpClient`] if
     /// [`ClientBuilder::http_client`] is combined with
-    /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`]; or
+    /// [`ClientBuilder::tls`] or [`ClientBuilder::timeouts`];
     /// [`Error::InvalidRetryPolicy`] if the configured `RetryPolicy` has an
-    /// out-of-range `multiplier`.
+    /// out-of-range `multiplier`; [`Error::IncompleteCredentials`] if
+    /// [`ClientBuilder::username`] is set without a resolved API key/secret;
+    /// or [`Error::InvalidCredentials`] if the username/key/secret contain
+    /// `:` or are empty, or if [`ClientBuilder::username`] is combined with
+    /// plaintext `http` to a non-loopback host.
     pub fn build(self) -> Result<Client> {
         self.retry.validate()?;
 
@@ -289,13 +310,31 @@ impl ClientBuilder {
             );
         }
 
+        if let Some(user) = &self.username {
+            let Some(creds) = &credentials else {
+                return Err(Error::IncompleteCredentials {
+                    origin: "ClientBuilder::username",
+                    present: "username",
+                    missing: "api key/secret",
+                });
+            };
+            validate_token_parts([user.as_str(), creds.key.as_str(), creds.secret.as_str()])?;
+            if base_url.scheme() == "http" && !config::is_loopback_host(&base_url) {
+                return Err(Error::InvalidCredentials {
+                    reason: "personal access tokens require https or a loopback host",
+                });
+            }
+        }
+
         let mut base_headers = HeaderMap::new();
         base_headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         base_headers.insert(
             USER_AGENT,
             HeaderValue::from_str(&self.user_agent).map_err(|e| Error::Config(Box::new(e)))?,
         );
-        if let Some(credentials) = &credentials {
+        if let Some(credentials) = &credentials
+            && self.username.is_none()
+        {
             base_headers.insert(
                 HeaderName::from_static(X_API_KEY),
                 HeaderValue::from_str(credentials.key.as_str())
@@ -323,6 +362,7 @@ impl ClientBuilder {
                 http,
                 base_url,
                 credentials,
+                username: self.username,
                 max_response_bytes: self.max_response_bytes,
                 max_redirects: self.max_redirects,
                 retry: Mutex::new(self.retry),
@@ -330,6 +370,18 @@ impl ClientBuilder {
             }),
         })
     }
+}
+
+/// Checks a username/key/secret triple against openQA's `_token_auth` regex
+/// (`^([^:]+):([^:]+):([^:]+)$`): all three parts must be non-empty and free
+/// of `:`.
+fn validate_token_parts(parts: [&str; 3]) -> Result<()> {
+    if parts.iter().any(|p| p.is_empty() || p.contains(':')) {
+        return Err(Error::InvalidCredentials {
+            reason: "username, api key, and api secret must be non-empty and must not contain ':'",
+        });
+    }
+    Ok(())
 }
 
 /// Explicit builder values, then `$OPENQA_API_KEY`/`$OPENQA_API_SECRET`, then
@@ -348,6 +400,7 @@ struct Inner {
     http: reqwest::Client,
     base_url: Url,
     credentials: Option<Credentials>,
+    username: Option<Username>,
     max_response_bytes: usize,
     max_redirects: usize,
     retry: Mutex<RetryPolicy>,
@@ -374,6 +427,7 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("base_url", &RedactedUrl(&self.inner.base_url))
             .field("credentials", &self.inner.credentials)
+            .field("username", &self.inner.username)
             .field("max_response_bytes", &self.inner.max_response_bytes)
             .field("max_redirects", &self.inner.max_redirects)
             .finish_non_exhaustive()
@@ -916,26 +970,39 @@ impl Client {
     }
 
     /// Builds a fresh `reqwest::Request` from `prepared`, signing it (fresh
-    /// timestamp and hash) right before sending.
+    /// timestamp and hash, or a fresh `Authorization: Bearer` header) right
+    /// before sending.
     ///
-    /// When a secret is present, the outgoing URL's query is first rewritten
-    /// to openQA's canonical form (see [`auth::canonical_query`]), so the
-    /// wire request matches what got signed — the server re-serializes the
-    /// query before hashing it regardless, but a caller inspecting
-    /// `prepared.url` after `execute` should see the same thing.
+    /// [`ClientBuilder::username`] switches this to token auth: an
+    /// `Authorization` header is inserted (unless the caller already set
+    /// one) and no HMAC headers are added at all. Otherwise, when a secret
+    /// is present, the outgoing URL's query is first rewritten to openQA's
+    /// canonical form (see [`auth::canonical_query`]), so the wire request
+    /// matches what got signed — the server re-serializes the query before
+    /// hashing it regardless, but a caller inspecting `prepared.url` after
+    /// `execute` should see the same thing.
     fn sign(&self, prepared: &PreparedRequest) -> reqwest::Request {
-        let secret = self.inner.credentials.as_ref().map(|c| &c.secret);
-
         let mut url = prepared.url.clone();
-        if secret.is_some()
-            && let Some(query) = url.query()
-        {
-            let canonical = auth::canonical_query(query);
-            url.set_query((!canonical.is_empty()).then_some(canonical.as_str()));
+        let mut headers = prepared.headers.clone();
+
+        match (&self.inner.username, &self.inner.credentials) {
+            (Some(user), Some(credentials)) => {
+                if !headers.contains_key(AUTHORIZATION) {
+                    headers.insert(AUTHORIZATION, credentials.bearer_value(user));
+                }
+            }
+            (_, credentials) => {
+                let secret = credentials.as_ref().map(|c| &c.secret);
+                if secret.is_some()
+                    && let Some(query) = url.query()
+                {
+                    let canonical = auth::canonical_query(query);
+                    url.set_query((!canonical.is_empty()).then_some(canonical.as_str()));
+                }
+                auth::apply(&mut headers, &url, secret);
+            }
         }
 
-        let mut headers = prepared.headers.clone();
-        auth::apply(&mut headers, &url, secret);
         for (name, value) in &self.inner.base_headers {
             if !headers.contains_key(name) {
                 headers.insert(name.clone(), value.clone());
@@ -1540,6 +1607,7 @@ mod tests {
                 http: reqwest::Client::new(),
                 base_url: Url::parse("https://alice:s3cret@openqa.example.com/").unwrap(),
                 credentials: None,
+                username: None,
                 max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
                 max_redirects: DEFAULT_MAX_REDIRECTS,
                 retry: Mutex::new(RetryPolicy::default()),
