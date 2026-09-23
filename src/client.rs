@@ -917,20 +917,32 @@ impl Client {
 
     /// Builds a fresh `reqwest::Request` from `prepared`, signing it (fresh
     /// timestamp and hash) right before sending.
+    ///
+    /// When a secret is present, the outgoing URL's query is first rewritten
+    /// to openQA's canonical form (see [`auth::canonical_query`]), so the
+    /// wire request matches what got signed — the server re-serializes the
+    /// query before hashing it regardless, but a caller inspecting
+    /// `prepared.url` after `execute` should see the same thing.
     fn sign(&self, prepared: &PreparedRequest) -> reqwest::Request {
+        let secret = self.inner.credentials.as_ref().map(|c| &c.secret);
+
+        let mut url = prepared.url.clone();
+        if secret.is_some()
+            && let Some(query) = url.query()
+        {
+            let canonical = auth::canonical_query(query);
+            url.set_query((!canonical.is_empty()).then_some(canonical.as_str()));
+        }
+
         let mut headers = prepared.headers.clone();
-        auth::apply(
-            &mut headers,
-            &prepared.url,
-            self.inner.credentials.as_ref().map(|c| &c.secret),
-        );
+        auth::apply(&mut headers, &url, secret);
         for (name, value) in &self.inner.base_headers {
             if !headers.contains_key(name) {
                 headers.insert(name.clone(), value.clone());
             }
         }
 
-        let mut req = reqwest::Request::new(prepared.method.clone(), prepared.url.clone());
+        let mut req = reqwest::Request::new(prepared.method.clone(), url);
         *req.headers_mut() = headers;
         if let Some(body) = &prepared.body {
             *req.body_mut() = Some(reqwest::Body::from(body.clone()));
