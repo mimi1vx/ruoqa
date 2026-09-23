@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Job state/result constants mirroring openQA's [`OpenQA::Jobs::Constants`],
-//! pinned to revision `e72ffeb28b6f77bde9bfcb96f490dd3d7049bf6d`. Kept in one
+//! pinned to revision `5c04ab047ac9cd2552a5d8cb5d92dc57e9c02bd9`. Kept in one
 //! place so consumers don't each hardcode "these are the running states" on
 //! their own.
 //!
@@ -22,7 +22,7 @@
 //! `OpenQA::Jobs::Constants` counterpart — they come from openQA's Python
 //! client and are kept as-is.
 //!
-//! [`OpenQA::Jobs::Constants`]: https://github.com/os-autoinst/openQA/blob/e72ffeb28b6f77bde9bfcb96f490dd3d7049bf6d/lib/OpenQA/Jobs/Constants.pm
+//! [`OpenQA::Jobs::Constants`]: https://github.com/os-autoinst/openQA/blob/5c04ab047ac9cd2552a5d8cb5d92dc57e9c02bd9/lib/OpenQA/Jobs/Constants.pm
 
 use serde::{Deserialize, Serialize};
 
@@ -481,7 +481,7 @@ mod tests {
         assert_eq!(de, JobResult::Unknown);
     }
 
-    // Matches openQA's `const.py` tuples byte-for-byte.
+    // Matches `OpenQA::Jobs::Constants`'s state-group arrays byte-for-byte.
     #[test]
     fn state_groups_match_openqa() {
         assert_eq!(

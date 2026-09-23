@@ -100,11 +100,11 @@ key = YOUR_API_KEY
 secret = YOUR_API_SECRET
 ```
 
-The lookup tries the bare `server` section first, then the full base URL
-section; both `key` and `secret` must be present in a section for it to
-count. When present, requests are HMAC-SHA1 signed and the `X-API-Key`
-header is sent. Without credentials only unauthenticated `GET` requests are
-possible.
+The lookup tries the `host[:port]` section first, then the full base URL
+(origin) section, then the bare host section; both `key` and `secret` must
+be present in a section for it to count. When present, requests are
+HMAC-SHA1 signed and the `X-API-Key` header is sent. Without credentials
+only unauthenticated `GET` requests are possible.
 
 Credentials are resolved in three tiers: explicit
 `ClientBuilder::api_key`/`api_secret` calls, then
@@ -288,6 +288,10 @@ rule governs transport errors and statuses alike.
 - Response bodies are capped (32 MiB by default, configurable via
   [`ClientBuilder::max_response_bytes`]) unless read via
   [`Client::send_raw`].
+- **Signed requests send the query in openQA's canonical form** — the same
+  form the server re-serializes into before verifying the HMAC — so a caller
+  inspecting a signed [`PreparedRequest`]'s `url` after `execute` may see a
+  rewritten query (e.g. `~` becomes `%7E`), not necessarily the one it built.
 - URLs are userinfo-redacted wherever they appear in errors or logs.
 - [`Error::DeadlineExceeded`] does not mean the server did not act on the
   request — an aborted in-flight write may already have been committed.

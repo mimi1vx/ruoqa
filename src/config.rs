@@ -34,9 +34,10 @@ pub struct Config {
 /// user `client.conf` replaces `/etc/openqa/client.conf` rather than merging
 /// with it:
 ///
-/// 1. `$OPENQA_CONFIG` (only when set and non-empty; a ruoqa extension is
-///    that an empty tier — no `client.conf` and no drop-ins — falls through
-///    to tier 2 instead of being an exclusive override).
+/// 1. `$OPENQA_CONFIG` (only when set and non-empty — matching upstream; an
+///    empty tier — set but yielding no `client.conf` and no drop-ins —
+///    falling through to tier 2 instead of being an exclusive override is
+///    upstream behaviour too, not a ruoqa extension).
 /// 2. The user config dir: `$XDG_CONFIG_HOME/openqa` when that variable is
 ///    set, non-empty, and absolute, else `$HOME/.config/openqa`
 ///    (`$XDG_CONFIG_HOME` is a ruoqa extension; upstream hardcodes
@@ -220,10 +221,12 @@ pub fn resolve(paths: &[impl AsRef<Path>], server: &str, scheme: &str) -> Result
         Url::parse(&format!("{scheme}://{server}")).map_err(|e| Error::Config(Box::new(e)))?;
 
     // Never echoes the credentials: userinfo never authenticated a ruoqa
-    // request (see plans/url-userinfo-redaction.md), so there's nothing
-    // sensitive to withhold, but no reason to print it either.
+    // request, so there's nothing sensitive to withhold, but no reason to
+    // print it either.
     if !base_url.username().is_empty() || base_url.password().is_some() {
-        tracing::warn!("dropping userinfo from server URL: it does not authenticate requests");
+        tracing::warn!(
+            "dropping userinfo from server URL: ruoqa does not use it for authentication"
+        );
         let _ = base_url.set_username("");
         let _ = base_url.set_password(None);
     }
@@ -302,8 +305,9 @@ fn load_merged(paths: &[impl AsRef<Path>]) -> Result<Ini> {
 /// `base_url` origin's, then the bare host's (matching `openqa-cli`'s
 /// `api => $url->host` for parity with upstream, which only ever fires when
 /// the first two miss). Both `key` and `secret` must be present in a
-/// section for it to count, matching upstream's all-or-nothing
-/// `except configparser.Error` fallback.
+/// section for it to count — matching the Python client's all-or-nothing
+/// `except configparser.Error` fallback, but a deliberate divergence from
+/// Perl's `configure_credentials`, which resolves `key`/`secret` per field.
 fn lookup_credentials(
     config: &Ini,
     authority: &str,
