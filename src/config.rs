@@ -342,7 +342,7 @@ mod tests {
     fn userinfo_in_bare_authority_server_is_stripped() {
         let no_paths: [PathBuf; 0] = [];
         let config = resolve(&no_paths, "alice:s3cret@openqa.example.com", "").unwrap();
-        assert!(config.base_url.username().is_empty());
+        assert_eq!(config.base_url.username(), "");
         assert!(config.base_url.password().is_none());
         assert_eq!(config.base_url.host_str(), Some("openqa.example.com"));
     }
@@ -360,7 +360,7 @@ mod tests {
         .unwrap();
         let config = resolve(&[&path], "", "").unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(config.base_url.username().is_empty());
+        assert_eq!(config.base_url.username(), "");
         assert!(config.base_url.password().is_none());
     }
 
@@ -579,7 +579,7 @@ mod tests {
         let files = lookup_config_files(&[vec![tier1]], "client.conf");
 
         std::fs::remove_dir_all(&base).unwrap();
-        assert!(files.is_empty());
+        assert_eq!(files, Vec::<std::path::PathBuf>::new());
     }
 
     #[test]
