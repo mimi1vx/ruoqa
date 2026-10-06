@@ -13,7 +13,7 @@ fn golden_vectors_reproduce_byte_for_byte() {
         .expect("tests/vectors.json is readable");
     let file: Value = serde_json::from_str(&raw).expect("tests/vectors.json is valid JSON");
     let vectors = file["vectors"].as_array().expect("vectors is an array");
-    assert!(!vectors.is_empty());
+    assert_ne!(vectors.as_slice(), [] as [Value; 0]);
 
     for vector in vectors {
         let url_str = vector["url"].as_str().expect("url is a string");
